@@ -1,9 +1,13 @@
 use std::error::Error;
+use std::ops::DerefMut;
 use std::process::{ExitStatus, Stdio};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::error::RadError;
 
@@ -17,7 +21,7 @@ fn return_app_err(status: &ExitStatus) -> Result<(), Box<RadError>> {
     Err(Box::new(RadError::from(format!("Exit code: {}", code))))
 }
 
-pub async fn run_app_source_async(command: String, args: &[&str], tx: SyncSender<u8>) -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn run_app_source_async(command: String, args: &[&str], tx: Sender<u8>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut process = Command::new(command)
         .args(args)
         .kill_on_drop(true)
@@ -37,14 +41,14 @@ pub async fn run_app_source_async(command: String, args: &[&str], tx: SyncSender
 
         println!("Sending {} bytes", size);
         for j in 0..size {
-            tx.send(buffer[j])?;
+            tx.send(buffer[j]).await?;
         }
     } //loop
 
     println!("waiting for source to exit");
     let exited = process.wait().await?;
     println!("source exited");
-    
+
     if !exited.success() {
         return_app_err(&exited)?;
     }
@@ -52,7 +56,40 @@ pub async fn run_app_source_async(command: String, args: &[&str], tx: SyncSender
     Ok(())
 }
 
-pub async fn run_app_sink_async(command: String, args: &[&str], rx: Receiver<u8>) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn sink_write(process: &mut Child, rx_am: Arc<Mutex<Receiver<u8>>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut rx_mg = rx_am.lock().await;
+    let rx = rx_mg.deref_mut();
+    
+    let stdin = process.stdin.as_mut().ok_or(RadError::from("Error obtaining stdin"))?;
+    loop {
+        let data_res = rx.try_recv();
+        if let Err(e) = data_res {
+            return if e == TryRecvError::Empty {
+                sleep(Duration::from_millis(1)).await;
+                Ok(())
+            } else {
+                Err(Box::new(e))
+            }
+        }
+
+        let data = data_res.unwrap();
+
+        //println!("Writing 1 byte");
+        stdin.write_u8(data).await?;
+    } //loop
+}
+
+async fn check_app_stopped(process: &mut Child) -> Result<Option<ExitStatus>, Box<dyn Error + Sync + Send>> {
+    let exited = process.try_wait()?;
+    if exited.is_none() {
+        return Ok(None);
+    }
+
+    let status = exited.unwrap();
+    Ok(Some(status))
+}
+
+pub async fn run_app_sink_async(command: String, args: &[&str], rx_am: Arc<Mutex<Receiver<u8>>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut process = Command::new(command)
         .args(args)
         .kill_on_drop(true)
@@ -62,26 +99,20 @@ pub async fn run_app_sink_async(command: String, args: &[&str], rx: Receiver<u8>
     if process.stdin.is_none() {
         return Ok(());
     }
-    
-    let stdin = process.stdin.as_mut().ok_or(RadError::from("Error obtaining stdin"))?;
+
     loop {
-        let data_res = rx.recv();
-        if let Err(e) = data_res {
-            break;
+        sink_write(&mut process, rx_am.clone()).await?;
+        let status = check_app_stopped(&mut process).await?;
+        if let Some(s) = status {
+            /* exited */
+            return if s.success() {
+                Ok(())
+            } else if s.code().is_some() {
+                Err(Box::new(RadError::from(format!("Error code: {}", s.code().unwrap()))))
+            } else {
+                Err(Box::new(RadError::from("Error code: [unknown]")))
+            }
         }
-        
-        let data = data_res.unwrap();
-        
-        //println!("Writing 1 byte");
-        stdin.write_u8(data).await?;
-    } //loop
-
-    //if the receiver is disconnected, kill the running app
-    process.kill().await?;
-
-    let exited = process.wait().await?;
-    if !exited.success() {
-        return_app_err(&exited)?;
+        sleep(Duration::from_millis(2)).await;
     }
-    Ok(())
 }
