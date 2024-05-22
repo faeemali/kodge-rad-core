@@ -1,4 +1,4 @@
 {
-  "input": "/bin/ls",
-  "output": "stdout"
+  "input": "./reader.sh",
+  "output": "./writer.sh"
 }
