@@ -33,8 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let source_handle = tokio::spawn(run_app_source_async(config.input.clone(), &[], source_tx.clone()));
     let sink_handle = tokio::spawn(run_app_sink_async(config.output.clone(), &[], rx_am.clone()));
-
-
+    
     let results = join_all(vec![source_handle, sink_handle]).await;
     for result in results {
         if result.is_err() {

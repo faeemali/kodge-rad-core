@@ -5,20 +5,46 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::error::RadError;
 
 
-fn return_app_err(status: &ExitStatus) -> Result<(), Box<RadError>> {
-    if status.code().is_none() {
-        return Err(Box::new(RadError::from("Exit code: [unknown]")));
+fn check_app_exit_status(status: &Option<ExitStatus>) -> Result<bool, Box<RadError>> {
+    if let Some(s) = status {
+        /* exited */
+        return if s.success() {
+            Ok(true) //app exited successfully
+        } else if s.code().is_some() {
+            //app failed with an error code
+            Err(Box::new(RadError::from(format!("Error code: {}", s.code().unwrap()))))
+        } else {
+            //app failed without an error code
+            Err(Box::new(RadError::from("Error code: [unknown]")))
+        }
     }
 
-    let code = status.code().unwrap();
-    Err(Box::new(RadError::from(format!("Exit code: {}", code))))
+    //app is still running
+    Ok(false)
+}
+
+async fn read_from_source(process: &mut Child, tx: Sender<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let stdout = process.stdout.as_mut().ok_or(RadError::from("Error accessing stdout"))?;
+    let mut buffer: [u8; 1024] = [0; 1024];
+    loop {
+        let size = stdout.read(&mut buffer).await?;
+        if size == 0 {
+            println!("read from source exiting function");
+            return Ok(());
+        }
+
+        println!("Sending {} bytes", size);
+        for j in 0..size {
+            tx.send(buffer[j]).await?;
+        }
+    } //loop
 }
 
 pub async fn run_app_source_async(command: String, args: &[&str], tx: Sender<u8>) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -31,27 +57,19 @@ pub async fn run_app_source_async(command: String, args: &[&str], tx: Sender<u8>
     if process.stdout.is_none() {
         return Ok(());
     }
-    let stdout = process.stdout.as_mut().ok_or(RadError::from("Error accessing stdout"))?;
-    let mut buffer: [u8; 1024] = [0; 1024];
+
     loop {
-        let size = stdout.read(&mut buffer).await?;
-        if size == 0 {
-            break;
+        read_from_source(&mut process, tx.clone()).await?;
+        let status = check_app_stopped(&mut process).await?;
+        let exited = check_app_exit_status(&status)?;
+        if exited {
+           break;
         }
-
-        println!("Sending {} bytes", size);
-        for j in 0..size {
-            tx.send(buffer[j]).await?;
-        }
-    } //loop
-
-    println!("waiting for source to exit");
-    let exited = process.wait().await?;
-    println!("source exited");
-
-    if !exited.success() {
-        return_app_err(&exited)?;
+        sleep(Duration::from_millis(1)).await;
     }
+
+    println!("dropping tx");
+    drop(tx);
 
     Ok(())
 }
@@ -59,7 +77,7 @@ pub async fn run_app_source_async(command: String, args: &[&str], tx: Sender<u8>
 async fn sink_write(process: &mut Child, rx_am: Arc<Mutex<Receiver<u8>>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut rx_mg = rx_am.lock().await;
     let rx = rx_mg.deref_mut();
-    
+
     let stdin = process.stdin.as_mut().ok_or(RadError::from("Error obtaining stdin"))?;
     loop {
         let data_res = rx.try_recv();
@@ -86,6 +104,7 @@ async fn check_app_stopped(process: &mut Child) -> Result<Option<ExitStatus>, Bo
     }
 
     let status = exited.unwrap();
+    println!("app status: {:?}", status);
     Ok(Some(status))
 }
 
@@ -103,16 +122,12 @@ pub async fn run_app_sink_async(command: String, args: &[&str], rx_am: Arc<Mutex
     loop {
         sink_write(&mut process, rx_am.clone()).await?;
         let status = check_app_stopped(&mut process).await?;
-        if let Some(s) = status {
-            /* exited */
-            return if s.success() {
-                Ok(())
-            } else if s.code().is_some() {
-                Err(Box::new(RadError::from(format!("Error code: {}", s.code().unwrap()))))
-            } else {
-                Err(Box::new(RadError::from("Error code: [unknown]")))
-            }
+        let exited = check_app_exit_status(&status)?;
+        if exited {
+            break;
         }
         sleep(Duration::from_millis(2)).await;
     }
+
+    Ok(())
 }
