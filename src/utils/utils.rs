@@ -80,16 +80,14 @@ async fn sink_write(process: &mut Child, rx_am: Arc<Mutex<Receiver<u8>>>) -> Res
 
     let stdin = process.stdin.as_mut().ok_or(RadError::from("Error obtaining stdin"))?;
     loop {
-        let data_res = rx.try_recv();
-        if let Err(e) = data_res {
-            return if e == TryRecvError::Empty {
-                sleep(Duration::from_millis(1)).await;
-                Ok(())
-            } else {
-                Err(Box::new(e))
-            }
+        println!("reading from channel");
+        let data_res = rx.recv().await;
+        println!("read from channel complete");
+        if data_res.is_none() {
+            println!("sink detected channel closed");
+            let _ = process.kill().await;
+            return Err(Box::new(RadError::from("sink write error: channel closed")));
         }
-
         let data = data_res.unwrap();
 
         //println!("Writing 1 byte");
