@@ -6,7 +6,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::error::RadError;

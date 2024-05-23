@@ -6,6 +6,7 @@ pub struct RadError {
 }
 
 impl RadError {
+    #[allow(dead_code)]
     pub fn new(msg: &str) -> RadError {
         RadError {
             message: String::from(msg),

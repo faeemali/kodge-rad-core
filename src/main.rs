@@ -1,17 +1,15 @@
 mod utils;
-mod config;
 mod error;
+mod config;
 
 use std::env::args;
 use std::error::Error;
 use std::process::exit;
 use std::sync::Arc;
-use std::time::Duration;
 use futures::future::join_all;
 use tokio::sync::mpsc::channel;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
-use crate::config::config_load;
+use crate::config::config::config_load;
 use crate::utils::utils::{run_app_sink_async, run_app_source_async};
 
 #[tokio::main]

@@ -1,11 +1,12 @@
 apps:
   #id is mandatory and must be unique
-  - id: input1
-    #name is optional
-    name: reader script
+  - id: 
+      id: input1
+      #name is optional
+      name: reader script
+      #description is optional
+      description: data received from reader script
     type: included
-    #description is optional
-    description: data received from reader script
     #mandatory. can be one or more inputs. can be one or more outputs
     #for instance, maybe there's stdout, and error out.
     #or maybe there's 2 different types of data being output.
@@ -17,40 +18,46 @@ apps:
       #this must be done such that all inputs and outputs are linked
       in: null
       out:
-        - id: out1
+        - id: 
+            id: out1
+            description: some optional description
           type: single
-          description: some optional description
           integration:
             type: stdout
             extras: null
-  - id: processor1
-    name: string processor
+  - id: 
+      id: processor1
+      name: string processor
+      description: converts data into strings
     type: included
-    description: converts data into strings
     io:
       in:
-        - id: in1
+        - id: 
+            id: in1
+            description: some optional description
           type: single
-          description: some optional description
           integration:
             type: stdin
             extras: null
       out:
-        - id: out1
+        - id: 
+            id: out1
+            description: some optional description
           type: single
-          description: some optional description
           integration:
             type: stdout
             extras: null
-  - id: output1
-    name: writer script
+  - id: 
+      id: output1
+      name: writer script
+      description: data written to the writer script
     type: included
-    description: data written to the writer script
     io:
       in:
-        - id: in1
+        - id: 
+            id: in1
+            description: some optional description
           type: single
-          description: some optional description
           integration:
             type: stdout
             extras: null

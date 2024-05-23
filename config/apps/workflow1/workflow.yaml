@@ -1,6 +1,7 @@
-id: workflow1
-name: my first workflow
-description: some generic workflow description
+id: 
+  id: workflow1
+  name: my first workflow
+  description: some generic workflow description
 apps:
   - input1
   - processor1
