@@ -1,0 +1,22 @@
+id: workflow1
+name: my first workflow
+description: some generic workflow description
+apps:
+  - input1
+  - processor1
+  - output1
+connections:
+  #connections can only be output->input, never input->output.
+  #output->input is eg. source to a processor, or
+  #processor->processor, or even processor->output.
+  #but input->output is basically a processor of some sort.
+  #eg. suppose there's a processor that does json->xml.
+  #In that case, the INPUT will be json, and the OUTPUT will
+  #be XML. So the processor (i.e. the code) does the input->output
+  #conversion. For that reason, connections can only be output->input
+  - outin:
+      out: '[input1]-out1'
+      in: '[processor1]-in1'
+  - outin:
+      out: '[processor1]-out1'
+      in: '[output1]-in1'
