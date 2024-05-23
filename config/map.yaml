@@ -1,0 +1,51 @@
+processors:
+  #id is mandatory and must be unique
+  - id: input1
+    #name is optional
+    name: reader script
+    #description is optional
+    description: data received from reader script
+    #mandatory. can be one or more inputs. can be one or more outputs
+    #for instance, maybe there's stdout, and error out.
+    #or maybe there's 2 different types of data being output.
+    #same applies for input.
+    #inputs and outputs can also be one or many i.e. for every named
+    #input and/or output, data can come/go to/from one place, or many
+    io:
+      #the workflow must link this output up to an input.
+      #this must be done such that all inputs and outputs are linked
+      - out-single:
+          id: input1-out1
+  - id: processor1
+    name: string processor
+    description: converts data into strings
+    io:
+      - in-single:
+          id: processor1-in1
+      - out-single:
+          id: processor1-out1
+  - id: output1
+    name: writer script
+    description: data written to the writer script
+    io:
+      - in-single:
+          id: output1-in1
+workflows:
+  - id: workflow1
+    name: my first workflow
+    description: some generic workflow description
+    connections:
+      #connections can only be output->input, never input->output.
+      #output->input is eg. source to a processor, or
+      #processor->processor, or even processor->output.
+      #but input->output is basically a processor of some sort.
+      #eg. suppose there's a processor that does json->xml.
+      #In that case, the INPUT will be json, and the OUTPUT will
+      #be XML. So the processor (i.e. the code) does the input->output
+      #conversion. For that reason, connections can only be output->input
+      - outin:
+          out: input1-out1
+          in: processor1-in1
+      - outin:
+          out: processor1-out1
+          in: output1-in1
