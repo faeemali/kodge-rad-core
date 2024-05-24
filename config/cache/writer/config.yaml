@@ -1,0 +1,16 @@
+id:
+  id: output1
+  name: writer script
+  description: data written to the writer script
+io:
+  in:
+    - id:
+        id: in1
+        description: some optional description
+      type: single
+      integration:
+        type: stdout
+        extras: null
+execution:
+  cmd: writer.sh
+  args:

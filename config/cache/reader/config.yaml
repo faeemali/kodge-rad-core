@@ -1,0 +1,27 @@
+id:
+  id: input1
+  #name is optional
+  name: reader script
+  #description is optional
+  description: data received from reader script
+#mandatory. can be one or more inputs. can be one or more outputs
+#for instance, maybe there's stdout, and error out.
+#or maybe there's 2 different types of data being output.
+#same applies for input.
+#inputs and outputs can also be one or many i.e. for every named
+#input and/or output, data can come/go to/from one place, or many
+io:
+  #the workflow must link this output up to an input.
+  #this must be done such that all inputs and outputs are linked
+  in: null
+  out:
+    - id:
+        id: out1
+        description: some optional description
+      type: single
+      integration:
+        type: stdout
+        extras: null
+execution:
+  cmd: reader.sh
+  args:

@@ -2,17 +2,18 @@ use serde::{Deserialize, Serialize};
 use crate::config::config_common::{ConfigId, KVPair};
 
 #[derive(Serialize, Deserialize)]
-pub struct Registry {
-    pub apps: Vec<App>,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct App {
     pub id: ConfigId,
     #[serde(rename = "type")]
     pub app_type: String,
     pub io: Vec<AppIo>,
+    pub execution: AppExecution,
+}
 
+#[derive(Serialize, Deserialize)]
+pub struct AppExecution {
+    pub cmd: String,
+    pub args: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
