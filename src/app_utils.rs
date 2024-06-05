@@ -1,13 +1,8 @@
 use std::error::Error;
 use std::fs::{read_dir};
 use std::path::Path;
-use crate::AppCtx;
 
-pub fn app_manager_init(ctx: &AppCtx) -> Result<Vec<String>, Box<dyn Error>> {
-    get_all_apps(&ctx.base_dir)
-}
-
-fn get_all_apps(base_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
+pub fn get_all_apps(base_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let filename = format!("{}/apps", base_dir);
     let path = Path::new(filename.as_str());
     if (!Path::exists(path)) {
@@ -16,6 +11,16 @@ fn get_all_apps(base_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
 
     let apps = get_dirs(path)?;
     Ok(apps)
+}
+
+pub fn app_exists(base_dir: &str, app_name: &str) -> Result<bool, Box<dyn Error>> {
+    let apps = get_all_apps(base_dir)?;
+    for app in &apps {
+        if app == app_name {
+            return Ok(true)
+        }
+    }
+    Ok(false)
 }
 
 fn get_dirs(dir_path: &Path) -> Result<Vec<String>, std::io::Error> {

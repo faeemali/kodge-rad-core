@@ -14,6 +14,7 @@ connections:
   #In that case, the INPUT will be json, and the OUTPUT will
   #be XML. So the processor (i.e. the code) does the input->output
   #conversion. For that reason, connections can only be output->input
-  - outin:
-      out: '[input1]-out1'
-      in: '[output1]-in1'
+  - out: '[input1]-out1'
+    in: '[output1]-in1'
+
+  

@@ -128,3 +128,14 @@ pub async fn run_app_sink_async(command: String, args: &[&str], rx_am: Arc<Mutex
 
     Ok(())
 }
+
+pub fn get_value_or_unknown(opt: &Option<String>) -> String {
+   match opt {
+       Some(s) => {
+           s.to_string()
+       }
+       None => {
+           "[unknown]".to_string()
+       }
+   } 
+}
