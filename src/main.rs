@@ -1,13 +1,13 @@
 mod utils;
 mod error;
 mod config;
-mod app_utils;
+mod app;
 mod workflow;
 
 use std::env::args;
 use std::error::Error;
 use std::process::exit;
-use crate::app_utils::{app_exists, get_all_apps};
+use crate::app::{app_exists, get_all_apps};
 use crate::error::RadError;
 use crate::workflow::execute_workflow;
 

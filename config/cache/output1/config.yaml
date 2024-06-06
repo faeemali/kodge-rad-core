@@ -9,7 +9,7 @@ io:
         description: some optional description
       type: single
       integration:
-        type: stdout
+        type: stdin
         extras: null
 execution:
   cmd: writer.sh
