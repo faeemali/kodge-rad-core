@@ -5,6 +5,7 @@ use crate::AppCtx;
 use crate::config::config_common::{ConfigId, KVPair};
 use crate::error::RadError;
 use crate::utils::utils::{get_dirs, load_yaml};
+use crate::workflow::Workflow;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppExecution {
@@ -113,8 +114,8 @@ impl App {
     }
 }
 
-pub fn load_app(app_ctx: &AppCtx, app_name: &str) -> Result<App, Box<dyn Error>> {
-    let filename = format!("{}/cache/{}/config.yaml", app_ctx.base_dir, app_name);
+pub fn load_app(base_dir: &str, app_name: &str) -> Result<App, Box<dyn Error>> {
+    let filename = format!("{}/cache/{}/config.yaml", base_dir, app_name);
     let app = load_yaml::<App>(&filename)?;
     Ok(app)
 }

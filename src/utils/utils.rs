@@ -5,16 +5,15 @@ use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
+
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use crate::error::RadError;
-use crate::workflow::Workflow;
 
+use crate::error::RadError;
 
 fn check_app_exit_status(status: &Option<ExitStatus>) -> Result<bool, Box<RadError>> {
     if let Some(s) = status {

@@ -1,15 +1,16 @@
+use std::env::args;
+use std::error::Error;
+use std::process::exit;
+
+use crate::app::{app_exists, get_all_apps};
+use crate::error::RadError;
+use crate::workflow::execute_workflow;
+
 mod utils;
 mod error;
 mod config;
 mod app;
 mod workflow;
-
-use std::env::args;
-use std::error::Error;
-use std::process::exit;
-use crate::app::{app_exists, get_all_apps};
-use crate::error::RadError;
-use crate::workflow::execute_workflow;
 
 pub struct AppCtx {
     pub base_dir: String,
