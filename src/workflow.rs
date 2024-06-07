@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::error::Error;
+
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+
 use crate::app::{App, AppIoDefinition, load_app};
 use crate::AppCtx;
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
-use crate::utils::utils::{load_yaml};
+use crate::utils::utils::load_yaml;
 
 #[derive(Serialize, Deserialize)]
 pub struct Workflow {
@@ -22,7 +26,7 @@ pub struct OutIn {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum IoDirection {
+pub enum IoDirection {
     Out,
     In,
 }
@@ -34,6 +38,27 @@ struct ConnectorHolder<'a> {
     pub direction: IoDirection,
 }
 
+pub enum MessageTypes {
+    Process,
+    Kill,
+}
+
+//for messages sent across channels
+pub struct Message {
+    pub msg_type: MessageTypes,
+    pub data: Vec<u8>,
+}
+
+//contains a list of connectors, and the channels that must map to them
+struct ConnectorChannel<'a> {
+    pub app: &'a App,
+    pub direction: IoDirection,
+    pub id: String,
+    
+    //either rx or tx must be used, never both
+    pub rx: Option<Receiver<Message>>,
+    pub tx: Option<Sender<Message>>,
+}
 
 impl Workflow {
     fn verify_apps(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
@@ -158,6 +183,67 @@ impl Workflow {
 
         Ok(())
     }
+
+    fn find_app<'a>(&self, wf_ctx: &'a WorkflowCtx, app_id: &str) -> Option<&'a App> {
+        wf_ctx.apps.iter().find(|&app| app.id.id == app_id)
+    }
+
+    //creates channels between all outputs and inputs from the workflow
+    fn setup<'a>(&self, wf_ctx: &'a WorkflowCtx) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>>{
+        let mut map = HashMap::new();
+        for connection in &self.connections {
+            let (out_app_id, out_conn_id) = Self::get_app_and_connector(&connection.output)?;
+            let (in_app_id, in_conn_id) = Self::get_app_and_connector(&connection.input)?;
+
+            let out_app = match self.find_app(wf_ctx, &out_app_id) {
+                Some(a) => a,
+                None => {
+                    return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
+                }
+            };
+            
+            let in_app = match self.find_app(wf_ctx, &in_app_id) {
+                Some(a) => a,
+                None => {
+                    return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
+                }
+            };
+            
+            /* we can create a channel between in and out */
+            let (tx, rx) = channel(32);
+            
+            /* we read from the output, and write to the channel */
+            let out_connector = ConnectorChannel {
+                app: out_app,
+                direction: IoDirection::Out,
+                id: out_conn_id,
+                rx: None,
+                tx: Some(tx),
+            };
+            
+            /* we write to the input, which then does something with the data */
+            let in_connector = ConnectorChannel {
+                app: in_app,
+                direction: IoDirection::In,
+                id: in_conn_id,
+                rx: Some(rx),
+                tx: None,
+            };
+            
+            if map.contains_key(&connection.output) {
+                return Err(Box::new(RadError::from(format!("Duplicate connection found: {}", &connection.output))));
+            }
+            
+            if map.contains_key(&connection.input) {
+                return Err(Box::new(RadError::from(format!("Duplication connection found: {}", &connection.input))));
+            }
+            
+            map.insert(connection.output.to_string(), out_connector);
+            map.insert(connection.input.to_string(), in_connector);
+        }
+        
+        Ok(map)
+    }
 }
 
 pub struct WorkflowCtx {
@@ -185,7 +271,12 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
     wf_ctx.workflow.verify(&wf_ctx)?;
     wf_ctx.workflow.verify_connections(&wf_ctx)?;
     println!("All app connections verified");
+    
+    let connector_map = wf_ctx.workflow.setup(&wf_ctx)?;
 
+    /* start each app in the map */
+    /* todo: start each app from wf_ctx. Then for each app, create a state machine that sends/reads data for each connector, as specified in the map */
+    
     Ok(())
 }
 

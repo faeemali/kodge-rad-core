@@ -1,16 +1,15 @@
 use std::error::Error;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
-use crate::AppCtx;
 use crate::config::config_common::{ConfigId, KVPair};
 use crate::error::RadError;
 use crate::utils::utils::{get_dirs, load_yaml};
-use crate::workflow::Workflow;
+use crate::workflow::IoDirection;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppExecution {
     pub cmd: String,
-    pub args: Option<String>,
+    pub args: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -111,6 +110,30 @@ impl App {
         self.id.print();
         self.io.verify()?;
         Ok(())
+    }
+    
+    pub fn find_connector_by_id<'a>(&self, id: &str, ios: &'a Option<Vec<AppIoDefinition>>) -> Option<&'a AppIoDefinition> {
+        return match ios {
+            Some(s) => {
+                for def in s {
+                    if def.id.id == id {
+                        return Some(def);
+                    }
+                }
+                None
+            }
+            None => {
+               None 
+            }
+        };
+    }
+    
+    pub fn find_connector(&self, id: &str, direction: IoDirection) -> Option<&AppIoDefinition> {
+        return if direction == IoDirection::In {
+            self.find_connector_by_id(id, &self.io.input)
+        } else {
+            self.find_connector_by_id(id, &self.io.output)
+        }
     }
 }
 
