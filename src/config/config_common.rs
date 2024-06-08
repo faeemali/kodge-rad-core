@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::utils::utils::get_value_or_unknown;
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct ConfigId {
     pub id: String,
     pub name: Option<String>,
@@ -21,7 +21,7 @@ impl ConfigId {
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct KVPair {
     pub key: String,
     pub value: String,

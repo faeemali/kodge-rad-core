@@ -10,13 +10,13 @@ pub const STDIN: &str = "stdin";
 pub const STDOUT: &str = "stdout";
 pub const STDERR: &str = "stderr";
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct AppExecution {
     pub cmd: String,
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct AppIoInOut {
     #[serde(rename = "in")]
     pub input: Option<Vec<AppIoDefinition>>,
@@ -43,7 +43,7 @@ impl AppIoInOut {
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct AppIoDefinition {
     pub id: ConfigId,
     #[serde(rename="type")]
@@ -70,7 +70,7 @@ impl AppIoDefinition {
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct AppIoIntegration {
     #[serde(rename = "type")]
     pub integration_type: String,
@@ -102,7 +102,7 @@ impl AppIoIntegration {
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct App {
     pub id: ConfigId,
     pub io: AppIoInOut,

@@ -4,6 +4,7 @@ use std::ops::{Deref, DerefMut};
 use std::process::Stdio;
 use std::rc::Rc;
 use std::sync::Arc;
+use futures::SinkExt;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
@@ -56,10 +57,10 @@ pub struct Message {
 }
 
 //contains a list of connectors, and the channels that must map to them
-struct ConnectorChannel<'a> {
-    pub app: &'a App,
+struct ConnectorChannel{
+    pub app: App,
     pub direction: IoDirection,
-    pub connector: &'a AppIoDefinition,
+    pub connector: AppIoDefinition,
 
     //either rx or tx must be used, never both
     pub rx: Option<Receiver<Message>>,
@@ -89,20 +90,20 @@ pub struct WorkflowCtx {
 }
 
 //creates channels between all outputs and inputs from the workflow
-fn setup<'a>(apps: &'a [App], connections: &'a [OutIn]) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>> {
+fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashMap<String, ConnectorChannel>, Box<dyn Error>> {
     let mut map = HashMap::new();
     for connection in connections {
         let (out_app_id, out_conn_id) = get_app_and_connector(&connection.output)?;
         let (in_app_id, in_conn_id) = get_app_and_connector(&connection.input)?;
 
-        let out_app = match find_app(apps, &out_app_id) {
+        let out_app = match find_app(apps.clone(), &out_app_id) {
             Some(a) => {a},
             None => {
                 return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
             }
         };
 
-        let in_app = match find_app(apps,  &in_app_id) {
+        let in_app = match find_app(apps.clone(),  &in_app_id) {
             Some(a) => {a},
             None => {
                 return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
@@ -128,18 +129,18 @@ fn setup<'a>(apps: &'a [App], connections: &'a [OutIn]) -> Result<HashMap<String
 
         /* we read from the output, and write to the channel */
         let out_connector = ConnectorChannel {
-            app: out_app,
+            app: out_app.clone(),
             direction: IoDirection::Out,
-            connector: out_connector,
+            connector: out_connector.clone(),
             rx: None,
             tx: Some(tx),
         };
 
         /* we write to the input, which then does something with the data */
         let in_connector = ConnectorChannel {
-            app: in_app,
+            app: in_app.clone(),
             direction: IoDirection::In,
-            connector: in_connector,
+            connector: in_connector.clone(),
             rx: Some(rx),
             tx: None,
         };
@@ -179,22 +180,35 @@ fn find_connector_in_app<'a>(connector_id: &str, app: &'a App) -> Option<&'a App
     None
 }
 
-fn find_app<'a>(apps: &'a [App], app_id: &str) -> Option<&'a App> {
-    apps.iter().find(|&app| app.id.id == app_id)
+fn find_app(a_apps: Arc<Vec<App>>, app_id: &str) -> Option<App> {
+    let apps = a_apps.deref();
+    for app in apps {
+        if app.id.id == app_id {
+            let a = app.clone();
+            return Some(a);
+        }
+    }
+    None
 }
 
 /*
-    takes a connector map that's sorted by connector_id and arranges the connectors
-    in a hashmap, sorted by app_id
+    removes the items from the applied map, and adds them to a new map, aranged by app.
+    This is a destruction operation
 */
-pub fn sort_connector_map_by_app<'a>(connector_map: &'a HashMap<String, ConnectorChannel<'a>>) -> HashMap<&'a App, Vec<&'a ConnectorChannel<'a>>> {
+pub fn convert_connector_map_to_sort_by_app(a_connector_map: Arc<HashMap<String, ConnectorChannel>>) -> HashMap<App, Vec<ConnectorChannel>> {
     let mut app_map = HashMap::new();
-    for (k, v) in connector_map {
-        let app = v.app;
-        if !app_map.contains_key(app) {
-            app_map.insert(app, vec![v]);
+
+    let mut keys = vec![];
+    a_connector_map.keys().for_each(|k| keys.push(k.to_string()));
+
+    let cm = a_connector_map;
+    for key in keys {
+        let v = cm.remove(&key).unwrap();
+
+        if !app_map.contains_key(&v.app) {
+            app_map.insert(v.app.clone(), vec![v]);
         } else {
-            let list_opt = app_map.get_mut(app).unwrap();
+            let list_opt = app_map.get_mut(&v.app.clone()).unwrap();
             list_opt.push(v);
         }
     }
@@ -288,8 +302,8 @@ fn verify_app_and_connector(connectors: &mut [ConnectorHolder],
 }
 
 /* find connections (in/out) and for each app, ensure all connectors are used */
-fn verify_connections(wf_ctx: &WorkflowCtx, app: &[App]) -> Result<(), Box<dyn Error>> {
-    let mut connectors = get_connectors_for_apps(app);
+fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(), Box<dyn Error>> {
+    let mut connectors = get_connectors_for_apps(a_apps.deref());
 
     for outin in &wf_ctx.workflow.connections {
         let (out_app, out_connector) = get_app_and_connector(&outin.output)?;
@@ -335,11 +349,11 @@ fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, b
     (stdin, stdout, stderr)
 }
 
-async fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: Vec<&'a ConnectorChannel<'a>>) {
+async fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: Vec<&'a ConnectorChannel>) {
 
 }
 
-async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel<'a>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let (stdin, stdout, stderr) = must_grab_stdin_out_err(&connectors);
     let mut cmd = Command::new(&app.execution.cmd);
     let mut process = cmd.kill_on_drop(true);
@@ -367,13 +381,18 @@ async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel<'a>>) ->
     Ok(())
 }
 
-fn run_apps(app_map: HashMap<&'static App, Vec<&'static ConnectorChannel>>) {
-    for (app, connectors) in &app_map {
-        let app_clone = app.clone();
-        let connectors_clone = connectors.clone();
-        tokio::spawn(run_app(app_clone, connectors_clone));
-    }
+fn run_apps(app_map: &'static HashMap<&'static App, Vec<&'static ConnectorChannel>>) {
+    // for (app, connectors) in &app_map {
+    //     let app_clone = app.clone();
+    //     let connectors_clone = connectors.clone();
+    //     tokio::spawn(run_app(app_clone, connectors_clone));
+    // }
+}
 
+struct ExecutionCtx {
+    pub apps: Vec<App>,
+    pub connector_map: Arc<HashMap<String, ConnectorChannel>>,
+    pub app_map: HashMap<App, Vec<ConnectorChannel>>
 }
 
 pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -385,6 +404,7 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
         let app = load_app(&app_ctx.base_dir, app_name)?;
         apps.push(app);
     }
+    let a_apps = Arc::new(apps);
 
     let wf_ctx = WorkflowCtx {
         base_dir: app_ctx.base_dir.to_string(),
@@ -392,14 +412,22 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
     };
 
     wf_ctx.workflow.verify(&wf_ctx)?;
-    verify_connections(&wf_ctx, &apps)?;
+    verify_connections(&wf_ctx, a_apps.clone())?;
     println!("All app connections verified");
 
-    let connector_map = setup(&apps, &wf_ctx.workflow.connections)?;
-    let app_map = sort_connector_map_by_app(&connector_map);
+    let connector_map = create_channel_io(&apps, &wf_ctx.workflow.connections)?;
+    let a_connector_map = Arc::new(connector_map);
+
+    let app_map = convert_connector_map_to_sort_by_app(a_connector_map.clone());
+
+    let exec_ctx = ExecutionCtx {
+        connector_map: a_connector_map.clone(),
+        apps,
+        app_map,
+    };
 
     /* start each app in the map */
-    //tokio::spawn(run_apps(&app_map));
+    //run_apps(&app_map);
 
     Ok(())
 }
