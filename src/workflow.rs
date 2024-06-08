@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::ops::{Deref, DerefMut};
 use std::process::Stdio;
-use std::thread;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Mutex;
 
 use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
 use crate::AppCtx;
@@ -78,235 +81,234 @@ impl Workflow {
         self.verify_apps(wf_ctx)?;
         Ok(())
     }
-
-    fn __get_connectors<'a>(&self, app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, direction: IoDirection)
-                            -> Vec<ConnectorHolder<'a>> {
-        let mut io_defs = vec![];
-        return if let Some(ios) = io_opt {
-            ios.iter().for_each(|i| {
-                let holder = ConnectorHolder {
-                    app_id: app_id.to_string(),
-                    definition: i,
-                    connected: false,
-                    direction,
-                };
-                io_defs.push(holder);
-            });
-
-            io_defs
-        } else {
-            vec![]
-        };
-    }
-
-    fn get_connectors_for_apps<'a>(&self, wf_ctx: &'a WorkflowCtx) -> Vec<ConnectorHolder<'a>> {
-        let mut connectors: Vec<ConnectorHolder> = vec![];
-        for app in &wf_ctx.apps {
-            let mut input_connectors = self.__get_connectors(&app.id.id,
-                                                             &app.io.input,
-                                                             IoDirection::In);
-            connectors.append(&mut input_connectors);
-
-            let mut output_connectors = self.__get_connectors(&app.id.id,
-                                                              &app.io.output,
-                                                              IoDirection::Out);
-            connectors.append(&mut output_connectors);
-        }
-
-        connectors
-    }
-
-    /*
-       expects a string of the form [app name]-connector, splits the string and returns
-       "app name" and "connector"
-     */
-    fn get_app_and_connector(outin: &str) -> Result<(String, String), Box<dyn Error>> {
-        let split: Vec<&str> = outin.split("-").collect();
-        if split.len() != 2 {
-            return Err(Box::new(RadError::from("Invalid outin string: badly formatted")));
-        }
-
-        if !split[0].starts_with("[") || !split[0].ends_with("]") || split[0].len() <= 2 {
-            return Err(Box::new(RadError::from("Invalid app name specified in outin string: badly formatted")));
-        }
-
-        let app_name = &(split[0])[1..(split[0].len() - 1)];
-        if app_name.len() != app_name.trim().len() {
-            return Err(Box::new(RadError::from("Invalid app name specified in outin. Badly formatted (extra spaces)")));
-        }
-
-        let connector = split[1];
-        if connector.len() != connector.trim().len() {
-            return Err(Box::new(RadError::from("Invalid connector name in outin. Extra spaces")));
-        }
-
-        Ok((app_name.to_string(), connector.to_string()))
-    }
-
-    //verifies that an app and connector are matched to an application, and marks the
-    //connector as "used" in the application
-    fn verify_app_and_connector(&self,
-                                connectors: &mut [ConnectorHolder],
-                                app_id: &str,
-                                connector_id: &str,
-                                direction: IoDirection) -> Result<(), Box<dyn Error>> {
-        for connector in connectors {
-            if connector.app_id != app_id ||
-                connector.direction != direction ||
-                connector.connected ||
-                connector.definition.id.id != connector_id {
-                continue;
-            }
-
-            connector.connected = true;
-            return Ok(());
-        }
-
-        Err(Box::from(RadError::from(format!("[{}]-{} not matched in any app", app_id, connector_id))))
-    }
-
-    /* find connections (in/out) and for each app, ensure all connectors are used */
-    fn verify_connections(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
-        let mut connectors = self.get_connectors_for_apps(wf_ctx);
-
-        for outin in &wf_ctx.workflow.connections {
-            let (out_app, out_connector) = Self::get_app_and_connector(&outin.output)?;
-            self.verify_app_and_connector(&mut connectors, &out_app, &out_connector, IoDirection::Out)?;
-
-            let (in_app, in_connector) = Self::get_app_and_connector(&outin.input)?;
-            self.verify_app_and_connector(&mut connectors, &in_app, &in_connector, IoDirection::In)?;
-        }
-
-        /* scan through the list of connectors for any unused items */
-        for connector in &connectors {
-            if !connector.connected {
-                return Err(Box::new(RadError::from(format!("Found unused connector: [{}]-{}", connector.app_id, connector.definition.id.id))));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn find_app<'a>(&self, wf_ctx: &'a WorkflowCtx, app_id: &str) -> Option<&'a App> {
-        wf_ctx.apps.iter().find(|&app| app.id.id == app_id)
-    }
-    
-    fn find_connector_in_app<'a>(&self, connector_id: &str, app: &'a App) -> Option<&'a AppIoDefinition> {
-        if let Some(defs) = &app.io.input {
-            for def in defs {
-                if &def.id.id == connector_id {
-                    return Some(def);
-                }
-            }
-        }
-        
-        if let Some(defs) = &app.io.output {
-            for def in defs {
-                if &def.id.id == connector_id {
-                    return Some(def);
-                }
-            }
-        }
-        
-        None
-    }
-
-    //creates channels between all outputs and inputs from the workflow
-    fn setup<'a>(&self, wf_ctx: &'a WorkflowCtx) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>> {
-        let mut map = HashMap::new();
-        for connection in &self.connections {
-            let (out_app_id, out_conn_id) = Self::get_app_and_connector(&connection.output)?;
-            let (in_app_id, in_conn_id) = Self::get_app_and_connector(&connection.input)?;
-
-            let out_app = match self.find_app(wf_ctx, &out_app_id) {
-                Some(a) => a,
-                None => {
-                    return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
-                }
-            };
-
-            let in_app = match self.find_app(wf_ctx, &in_app_id) {
-                Some(a) => a,
-                None => {
-                    return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
-                }
-            };
-            
-            let out_connector = match self.find_connector_in_app(&out_conn_id, &out_app) {
-                Some(c) => c,
-                None => {
-                    return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &out_conn_id, &out_app_id))));      
-                }
-            };
-
-            let in_connector = match self.find_connector_in_app(&in_conn_id, &in_app) {
-                Some(c) => c,
-                None => {
-                    return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &in_conn_id, &in_app_id))));
-                }
-            };
-            
-            /* we can create a channel between in and out */
-            let (tx, rx) = channel(32);
-
-            /* we read from the output, and write to the channel */
-            let out_connector = ConnectorChannel {
-                app: out_app,
-                direction: IoDirection::Out,
-                connector: out_connector,
-                rx: None,
-                tx: Some(tx),
-            };
-
-            /* we write to the input, which then does something with the data */
-            let in_connector = ConnectorChannel {
-                app: in_app,
-                direction: IoDirection::In,
-                connector: in_connector,
-                rx: Some(rx),
-                tx: None,
-            };
-
-            if map.contains_key(&connection.output) {
-                return Err(Box::new(RadError::from(format!("Duplicate connection found: {}", &connection.output))));
-            }
-
-            if map.contains_key(&connection.input) {
-                return Err(Box::new(RadError::from(format!("Duplication connection found: {}", &connection.input))));
-            }
-
-            map.insert(connection.output.to_string(), out_connector);
-            map.insert(connection.input.to_string(), in_connector);
-        }
-
-        Ok(map)
-    }
-
-    /*
-        takes a connector map that's sorted by connector_id and arranges the connectors
-        in a hashmap, sorted by app_id
-    */
-    pub fn sort_connector_map_by_app<'a>(&self, connector_map: &'a HashMap<String, ConnectorChannel>) -> HashMap<&'a App, Vec<&'a ConnectorChannel<'a>>> {
-        let mut app_map = HashMap::new();
-        for (k, v) in connector_map {
-            let app = v.app;
-            if !app_map.contains_key(app) {
-                app_map.insert(app, vec![v]);
-            } else {
-                let list_opt = app_map.get_mut(app).unwrap();
-                list_opt.push(v);
-            }
-        }
-
-        app_map
-    }
 }
 
 pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
-    pub apps: Vec<App>,
 }
+
+//creates channels between all outputs and inputs from the workflow
+fn setup<'a>(apps: &'a [App], connections: &'a [OutIn]) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>> {
+    let mut map = HashMap::new();
+    for connection in connections {
+        let (out_app_id, out_conn_id) = get_app_and_connector(&connection.output)?;
+        let (in_app_id, in_conn_id) = get_app_and_connector(&connection.input)?;
+
+        let out_app = match find_app(apps, &out_app_id) {
+            Some(a) => {a},
+            None => {
+                return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
+            }
+        };
+
+        let in_app = match find_app(apps,  &in_app_id) {
+            Some(a) => {a},
+            None => {
+                return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
+            }
+        };
+
+        let out_connector = match find_connector_in_app(&out_conn_id, &out_app) {
+            Some(c) => c,
+            None => {
+                return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &out_conn_id, &out_app_id))));
+            }
+        };
+
+        let in_connector = match find_connector_in_app(&in_conn_id, &in_app) {
+            Some(c) => c,
+            None => {
+                return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &in_conn_id, &in_app_id))));
+            }
+        };
+
+        /* we can create a channel between in and out */
+        let (tx, rx) = channel(32);
+
+        /* we read from the output, and write to the channel */
+        let out_connector = ConnectorChannel {
+            app: out_app,
+            direction: IoDirection::Out,
+            connector: out_connector,
+            rx: None,
+            tx: Some(tx),
+        };
+
+        /* we write to the input, which then does something with the data */
+        let in_connector = ConnectorChannel {
+            app: in_app,
+            direction: IoDirection::In,
+            connector: in_connector,
+            rx: Some(rx),
+            tx: None,
+        };
+
+        if map.contains_key(&connection.output) {
+            return Err(Box::new(RadError::from(format!("Duplicate connection found: {}", &connection.output))));
+        }
+
+        if map.contains_key(&connection.input) {
+            return Err(Box::new(RadError::from(format!("Duplication connection found: {}", &connection.input))));
+        }
+
+        map.insert(connection.output.to_string(), out_connector);
+        map.insert(connection.input.to_string(), in_connector);
+    }
+
+    Ok(map)
+}
+
+fn find_connector_in_app<'a>(connector_id: &str, app: &'a App) -> Option<&'a AppIoDefinition> {
+    if let Some(defs) = &app.io.input {
+        for def in defs {
+            if &def.id.id == connector_id {
+                return Some(def);
+            }
+        }
+    }
+
+    if let Some(defs) = &app.io.output {
+        for def in defs {
+            if &def.id.id == connector_id {
+                return Some(def);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_app<'a>(apps: &'a [App], app_id: &str) -> Option<&'a App> {
+    apps.iter().find(|&app| app.id.id == app_id)
+}
+
+/*
+    takes a connector map that's sorted by connector_id and arranges the connectors
+    in a hashmap, sorted by app_id
+*/
+pub fn sort_connector_map_by_app<'a>(connector_map: &'a HashMap<String, ConnectorChannel<'a>>) -> HashMap<&'a App, Vec<&'a ConnectorChannel<'a>>> {
+    let mut app_map = HashMap::new();
+    for (k, v) in connector_map {
+        let app = v.app;
+        if !app_map.contains_key(app) {
+            app_map.insert(app, vec![v]);
+        } else {
+            let list_opt = app_map.get_mut(app).unwrap();
+            list_opt.push(v);
+        }
+    }
+
+    app_map
+}
+
+fn __get_connectors<'a>(app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, direction: IoDirection)
+                        -> Vec<ConnectorHolder<'a>> {
+    let mut io_defs = vec![];
+    return if let Some(ios) = io_opt {
+        ios.iter().for_each(|i| {
+            let holder = ConnectorHolder {
+                app_id: app_id.to_string(),
+                definition: i,
+                connected: false,
+                direction,
+            };
+            io_defs.push(holder);
+        });
+
+        io_defs
+    } else {
+        vec![]
+    };
+}
+
+fn get_connectors_for_apps<'a>(apps: &'a [App]) -> Vec<ConnectorHolder<'a>> {
+    let mut connectors: Vec<ConnectorHolder> = vec![];
+    for app in apps {
+        let mut input_connectors = __get_connectors(&app.id.id,
+                                                         &app.io.input,
+                                                         IoDirection::In);
+        connectors.append(&mut input_connectors);
+
+        let mut output_connectors = __get_connectors(&app.id.id,
+                                                          &app.io.output,
+                                                          IoDirection::Out);
+        connectors.append(&mut output_connectors);
+    }
+
+    connectors
+}
+
+/*
+   expects a string of the form [app name]-connector, splits the string and returns
+   "app name" and "connector"
+ */
+fn get_app_and_connector(outin: &str) -> Result<(String, String), Box<dyn Error>> {
+    let split: Vec<&str> = outin.split("-").collect();
+    if split.len() != 2 {
+        return Err(Box::new(RadError::from("Invalid outin string: badly formatted")));
+    }
+
+    if !split[0].starts_with("[") || !split[0].ends_with("]") || split[0].len() <= 2 {
+        return Err(Box::new(RadError::from("Invalid app name specified in outin string: badly formatted")));
+    }
+
+    let app_name = &(split[0])[1..(split[0].len() - 1)];
+    if app_name.len() != app_name.trim().len() {
+        return Err(Box::new(RadError::from("Invalid app name specified in outin. Badly formatted (extra spaces)")));
+    }
+
+    let connector = split[1];
+    if connector.len() != connector.trim().len() {
+        return Err(Box::new(RadError::from("Invalid connector name in outin. Extra spaces")));
+    }
+
+    Ok((app_name.to_string(), connector.to_string()))
+}
+
+//verifies that an app and connector are matched to an application, and marks the
+//connector as "used" in the application
+fn verify_app_and_connector(connectors: &mut [ConnectorHolder],
+                            app_id: &str,
+                            connector_id: &str,
+                            direction: IoDirection) -> Result<(), Box<dyn Error>> {
+    for connector in connectors {
+        if connector.app_id != app_id ||
+            connector.direction != direction ||
+            connector.connected ||
+            connector.definition.id.id != connector_id {
+            continue;
+        }
+
+        connector.connected = true;
+        return Ok(());
+    }
+
+    Err(Box::from(RadError::from(format!("[{}]-{} not matched in any app", app_id, connector_id))))
+}
+
+/* find connections (in/out) and for each app, ensure all connectors are used */
+fn verify_connections(wf_ctx: &WorkflowCtx, app: &[App]) -> Result<(), Box<dyn Error>> {
+    let mut connectors = get_connectors_for_apps(app);
+
+    for outin in &wf_ctx.workflow.connections {
+        let (out_app, out_connector) = get_app_and_connector(&outin.output)?;
+        verify_app_and_connector(&mut connectors, &out_app, &out_connector, IoDirection::Out)?;
+
+        let (in_app, in_connector) = get_app_and_connector(&outin.input)?;
+        verify_app_and_connector(&mut connectors, &in_app, &in_connector, IoDirection::In)?;
+    }
+
+    /* scan through the list of connectors for any unused items */
+    for connector in &connectors {
+        if !connector.connected {
+            return Err(Box::new(RadError::from(format!("Found unused connector: [{}]-{}", connector.app_id, connector.definition.id.id))));
+        }
+    }
+
+    Ok(())
+}
+
 
 /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
 fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, bool) {
@@ -329,48 +331,49 @@ fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, b
             }
         }
     }
-    
+
     (stdin, stdout, stderr)
 }
 
-fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: &'a Vec<&'a ConnectorChannel<'a>>) {
-    
+async fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: Vec<&'a ConnectorChannel<'a>>) {
+
 }
 
-fn run_app<'a>(app: &'a App, connectors: &'a Vec<&'a ConnectorChannel<'a>>) -> Result<(), Box<dyn Error>> {
-    let (stdin, stdout, stderr) = must_grab_stdin_out_err(connectors);
+async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel<'a>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (stdin, stdout, stderr) = must_grab_stdin_out_err(&connectors);
     let mut cmd = Command::new(&app.execution.cmd);
     let mut process = cmd.kill_on_drop(true);
-    
+
     if let Some(args) = &app.execution.args {
         process = process.args(args);
     }
-    
+
     if stdin {
         process = process.stdin(Stdio::piped());
     }
-    
+
     if stdout {
         process = process.stdout(Stdio::piped());
     }
-    
+
     if stderr {
         process = process.stderr(Stdio::piped());
     }
-    
+
     let child = process.spawn()?;
-    
-    monitor_child(&child, app, connectors);
-    
+
+    monitor_child(&child, app, connectors).await;
+
     Ok(())
 }
 
-fn run_apps(wf_ctx: &WorkflowCtx, connector_map: HashMap<String, ConnectorChannel>) {
-    let app_map = wf_ctx.workflow.sort_connector_map_by_app(&connector_map);
-
+fn run_apps(app_map: HashMap<&'static App, Vec<&'static ConnectorChannel>>) {
     for (app, connectors) in &app_map {
-        run_app(app, connectors);
+        let app_clone = app.clone();
+        let connectors_clone = connectors.clone();
+        tokio::spawn(run_app(app_clone, connectors_clone));
     }
+
 }
 
 pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -386,17 +389,17 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
     let wf_ctx = WorkflowCtx {
         base_dir: app_ctx.base_dir.to_string(),
         workflow,
-        apps,
     };
 
     wf_ctx.workflow.verify(&wf_ctx)?;
-    wf_ctx.workflow.verify_connections(&wf_ctx)?;
+    verify_connections(&wf_ctx, &apps)?;
     println!("All app connections verified");
 
-    let connector_map = wf_ctx.workflow.setup(&wf_ctx)?;
+    let connector_map = setup(&apps, &wf_ctx.workflow.connections)?;
+    let app_map = sort_connector_map_by_app(&connector_map);
 
     /* start each app in the map */
-    run_apps(&wf_ctx, connector_map);
+    //tokio::spawn(run_apps(&app_map));
 
     Ok(())
 }
