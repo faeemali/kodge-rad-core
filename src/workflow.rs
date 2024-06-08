@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
 use std::process::Stdio;
-use std::rc::Rc;
 use std::sync::Arc;
-use futures::SinkExt;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 
@@ -32,7 +30,7 @@ pub struct OutIn {
     pub input: String,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum IoDirection {
     Out,
     In,
@@ -45,12 +43,14 @@ struct ConnectorHolder<'a> {
     pub direction: IoDirection,
 }
 
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub enum MessageTypes {
     Process,
     Kill,
 }
 
 //for messages sent across channels
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Message {
     pub msg_type: MessageTypes,
     pub data: Vec<u8>,
@@ -195,13 +195,16 @@ fn find_app(a_apps: Arc<Vec<App>>, app_id: &str) -> Option<App> {
     removes the items from the applied map, and adds them to a new map, aranged by app.
     This is a destruction operation
 */
-pub fn convert_connector_map_to_sort_by_app(a_connector_map: Arc<HashMap<String, ConnectorChannel>>) -> HashMap<App, Vec<ConnectorChannel>> {
+pub async fn convert_connector_map_to_sort_by_app(am_connector_map: Arc<Mutex<HashMap<String, ConnectorChannel>>>) -> HashMap<App, Vec<ConnectorChannel>> {
+    let mut connector_map_mg = am_connector_map.lock().await;
+    let connector_map = connector_map_mg.deref_mut();
+
     let mut app_map = HashMap::new();
 
     let mut keys = vec![];
-    a_connector_map.keys().for_each(|k| keys.push(k.to_string()));
+    connector_map.keys().for_each(|k| keys.push(k.to_string()));
 
-    let cm = a_connector_map;
+    let cm = connector_map;
     for key in keys {
         let v = cm.remove(&key).unwrap();
 
@@ -325,7 +328,7 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
 
 
 /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
-fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, bool) {
+fn must_grab_stdin_out_err(connector: &Vec<ConnectorChannel>) -> (bool, bool, bool) {
     let mut stdin = false;
     let mut stdout = false;
     let mut stderr = false;
@@ -349,11 +352,7 @@ fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, b
     (stdin, stdout, stderr)
 }
 
-async fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: Vec<&'a ConnectorChannel>) {
-
-}
-
-async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel>) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn run_app(app: App, connectors: Vec<ConnectorChannel>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let (stdin, stdout, stderr) = must_grab_stdin_out_err(&connectors);
     let mut cmd = Command::new(&app.execution.cmd);
     let mut process = cmd.kill_on_drop(true);
@@ -376,26 +375,27 @@ async fn run_app<'a>(app: &'a App, connectors: Vec<&'a ConnectorChannel>) -> Res
 
     let child = process.spawn()?;
 
-    monitor_child(&child, app, connectors).await;
+    /* 
+        TODO: must read/write data from the process and tx/rx from the appropriate channel.
+            Most likely need to spawn multiple tasks here 
+    */
 
     Ok(())
 }
 
-fn run_apps(app_map: &'static HashMap<&'static App, Vec<&'static ConnectorChannel>>) {
-    // for (app, connectors) in &app_map {
-    //     let app_clone = app.clone();
-    //     let connectors_clone = connectors.clone();
-    //     tokio::spawn(run_app(app_clone, connectors_clone));
-    // }
+fn run_apps(exec_ctx: ExecutionCtx) {
+    let mut app_map = exec_ctx.app_map;
+    for (key, value) in app_map.drain() {
+        tokio::spawn(run_app(key, value));
+    }
 }
 
 struct ExecutionCtx {
-    pub apps: Vec<App>,
-    pub connector_map: Arc<HashMap<String, ConnectorChannel>>,
+    pub apps: Arc<Vec<App>>,
     pub app_map: HashMap<App, Vec<ConnectorChannel>>
 }
 
-pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
+pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
     let filename = format!("{}/apps/{}/workflow.yaml", app_ctx.base_dir, app_name);
     let workflow: Workflow = load_yaml(&filename)?;
 
@@ -415,19 +415,18 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
     verify_connections(&wf_ctx, a_apps.clone())?;
     println!("All app connections verified");
 
-    let connector_map = create_channel_io(&apps, &wf_ctx.workflow.connections)?;
-    let a_connector_map = Arc::new(connector_map);
+    let connector_map = create_channel_io(a_apps.clone(), &wf_ctx.workflow.connections)?;
+    let am_connector_map = Arc::new(Mutex::new(connector_map));
 
-    let app_map = convert_connector_map_to_sort_by_app(a_connector_map.clone());
+    let app_map = convert_connector_map_to_sort_by_app(am_connector_map.clone()).await;
 
     let exec_ctx = ExecutionCtx {
-        connector_map: a_connector_map.clone(),
-        apps,
+        apps: a_apps,
         app_map,
     };
 
     /* start each app in the map */
-    //run_apps(&app_map);
+    run_apps(exec_ctx);
 
     Ok(())
 }

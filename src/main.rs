@@ -32,15 +32,15 @@ fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_app(app_ctx: &AppCtx, app: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
+async fn run_app(app_ctx: &AppCtx, app: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
     if !app_exists(&app_ctx.base_dir, app)? {
         return Err(Box::new(RadError::from("App not found")));
     }
-    execute_workflow(app_ctx, app, args)?;
+    execute_workflow(app_ctx, app, args).await?;
     Ok(())
 }
 
-fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dyn Error>> {
+async fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dyn Error>> {
     let app_name = &cmd_line[0];
     let cmd = cmd_line[2].trim().to_lowercase();
     match cmd.as_str() {
@@ -59,7 +59,7 @@ fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dyn Erro
             } else {
                 &cmd_line[4..]
             };
-            run_app(app_ctx, &cmd_line[3], args)?;
+            run_app(app_ctx, &cmd_line[3], args).await?;
         }
         _ => {
             show_help(&cmd_line[0]);
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         base_dir: base_dir.to_string(),
     };
 
-    process_cmd(&app_ctx, &args)?;
+    process_cmd(&app_ctx, &args).await?;
 
     Ok(())
 }

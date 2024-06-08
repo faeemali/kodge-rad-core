@@ -150,7 +150,7 @@ pub fn load_app(base_dir: &str, app_name: &str) -> Result<App, Box<dyn Error>> {
 pub fn get_all_apps(base_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let filename = format!("{}/apps", base_dir);
     let path = Path::new(filename.as_str());
-    if (!Path::exists(path)) {
+    if !Path::exists(path) {
         return Ok(vec![]); //no apps
     }
 
