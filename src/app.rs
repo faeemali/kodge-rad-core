@@ -6,13 +6,17 @@ use crate::error::RadError;
 use crate::utils::utils::{get_dirs, load_yaml};
 use crate::workflow::IoDirection;
 
-#[derive(Serialize, Deserialize)]
+pub const STDIN: &str = "stdin";
+pub const STDOUT: &str = "stdout";
+pub const STDERR: &str = "stderr";
+
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct AppExecution {
     pub cmd: String,
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct AppIoInOut {
     #[serde(rename = "in")]
     pub input: Option<Vec<AppIoDefinition>>,
@@ -39,7 +43,7 @@ impl AppIoInOut {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct AppIoDefinition {
     pub id: ConfigId,
     #[serde(rename="type")]
@@ -66,7 +70,7 @@ impl AppIoDefinition {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct AppIoIntegration {
     #[serde(rename = "type")]
     pub integration_type: String,
@@ -77,10 +81,10 @@ impl AppIoIntegration {
     pub fn verify(&self, input: bool) -> Result<(), Box<dyn Error>> {
         self.print();
         if input {
-            if self.integration_type != "stdin" {
+            if self.integration_type != STDIN {
                 return Err(Box::new(RadError::from("Invalid input type specified")));
             }
-        } else if self.integration_type != "stdout" && self.integration_type != "stderr" {
+        } else if self.integration_type != STDOUT && self.integration_type != STDERR {
             return Err(Box::new(RadError::from("Invalid output type specified")));
         }
         Ok(())
@@ -98,7 +102,7 @@ impl AppIoIntegration {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct App {
     pub id: ConfigId,
     pub io: AppIoInOut,
@@ -111,7 +115,7 @@ impl App {
         self.io.verify()?;
         Ok(())
     }
-    
+
     pub fn find_connector_by_id<'a>(&self, id: &str, ios: &'a Option<Vec<AppIoDefinition>>) -> Option<&'a AppIoDefinition> {
         return match ios {
             Some(s) => {
@@ -123,11 +127,11 @@ impl App {
                 None
             }
             None => {
-               None 
+               None
             }
         };
     }
-    
+
     pub fn find_connector(&self, id: &str, direction: IoDirection) -> Option<&AppIoDefinition> {
         return if direction == IoDirection::In {
             self.find_connector_by_id(id, &self.io.input)

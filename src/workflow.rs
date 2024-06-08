@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::process::Stdio;
+use std::thread;
 
 use serde::{Deserialize, Serialize};
+use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::app::{App, AppIoDefinition, load_app};
+use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
 use crate::AppCtx;
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
@@ -53,8 +56,8 @@ pub struct Message {
 struct ConnectorChannel<'a> {
     pub app: &'a App,
     pub direction: IoDirection,
-    pub id: String,
-    
+    pub connector: &'a AppIoDefinition,
+
     //either rx or tx must be used, never both
     pub rx: Option<Receiver<Message>>,
     pub tx: Option<Sender<Message>>,
@@ -156,7 +159,7 @@ impl Workflow {
             }
 
             connector.connected = true;
-            return Ok(())
+            return Ok(());
         }
 
         Err(Box::from(RadError::from(format!("[{}]-{} not matched in any app", app_id, connector_id))))
@@ -187,9 +190,29 @@ impl Workflow {
     fn find_app<'a>(&self, wf_ctx: &'a WorkflowCtx, app_id: &str) -> Option<&'a App> {
         wf_ctx.apps.iter().find(|&app| app.id.id == app_id)
     }
+    
+    fn find_connector_in_app<'a>(&self, connector_id: &str, app: &'a App) -> Option<&'a AppIoDefinition> {
+        if let Some(defs) = &app.io.input {
+            for def in defs {
+                if &def.id.id == connector_id {
+                    return Some(def);
+                }
+            }
+        }
+        
+        if let Some(defs) = &app.io.output {
+            for def in defs {
+                if &def.id.id == connector_id {
+                    return Some(def);
+                }
+            }
+        }
+        
+        None
+    }
 
     //creates channels between all outputs and inputs from the workflow
-    fn setup<'a>(&self, wf_ctx: &'a WorkflowCtx) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>>{
+    fn setup<'a>(&self, wf_ctx: &'a WorkflowCtx) -> Result<HashMap<String, ConnectorChannel<'a>>, Box<dyn Error>> {
         let mut map = HashMap::new();
         for connection in &self.connections {
             let (out_app_id, out_conn_id) = Self::get_app_and_connector(&connection.output)?;
@@ -201,7 +224,7 @@ impl Workflow {
                     return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
                 }
             };
-            
+
             let in_app = match self.find_app(wf_ctx, &in_app_id) {
                 Some(a) => a,
                 None => {
@@ -209,40 +232,73 @@ impl Workflow {
                 }
             };
             
+            let out_connector = match self.find_connector_in_app(&out_conn_id, &out_app) {
+                Some(c) => c,
+                None => {
+                    return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &out_conn_id, &out_app_id))));      
+                }
+            };
+
+            let in_connector = match self.find_connector_in_app(&in_conn_id, &in_app) {
+                Some(c) => c,
+                None => {
+                    return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &in_conn_id, &in_app_id))));
+                }
+            };
+            
             /* we can create a channel between in and out */
             let (tx, rx) = channel(32);
-            
+
             /* we read from the output, and write to the channel */
             let out_connector = ConnectorChannel {
                 app: out_app,
                 direction: IoDirection::Out,
-                id: out_conn_id,
+                connector: out_connector,
                 rx: None,
                 tx: Some(tx),
             };
-            
+
             /* we write to the input, which then does something with the data */
             let in_connector = ConnectorChannel {
                 app: in_app,
                 direction: IoDirection::In,
-                id: in_conn_id,
+                connector: in_connector,
                 rx: Some(rx),
                 tx: None,
             };
-            
+
             if map.contains_key(&connection.output) {
                 return Err(Box::new(RadError::from(format!("Duplicate connection found: {}", &connection.output))));
             }
-            
+
             if map.contains_key(&connection.input) {
                 return Err(Box::new(RadError::from(format!("Duplication connection found: {}", &connection.input))));
             }
-            
+
             map.insert(connection.output.to_string(), out_connector);
             map.insert(connection.input.to_string(), in_connector);
         }
-        
+
         Ok(map)
+    }
+
+    /*
+        takes a connector map that's sorted by connector_id and arranges the connectors
+        in a hashmap, sorted by app_id
+    */
+    pub fn sort_connector_map_by_app<'a>(&self, connector_map: &'a HashMap<String, ConnectorChannel>) -> HashMap<&'a App, Vec<&'a ConnectorChannel<'a>>> {
+        let mut app_map = HashMap::new();
+        for (k, v) in connector_map {
+            let app = v.app;
+            if !app_map.contains_key(app) {
+                app_map.insert(app, vec![v]);
+            } else {
+                let list_opt = app_map.get_mut(app).unwrap();
+                list_opt.push(v);
+            }
+        }
+
+        app_map
     }
 }
 
@@ -250,6 +306,71 @@ pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
     pub apps: Vec<App>,
+}
+
+/* checks the list of connectors to see if we must grab stdin, stdout, stderr */
+fn must_grab_stdin_out_err(connector: &Vec<&ConnectorChannel>) -> (bool, bool, bool) {
+    let mut stdin = false;
+    let mut stdout = false;
+    let mut stderr = false;
+    for cc in connector {
+        match cc.connector.integration.integration_type.as_str() {
+            STDIN => {
+                stdin = true;
+            }
+            STDOUT => {
+                stdout = true;
+            }
+            STDERR => {
+                stderr = true;
+            }
+            _ => {
+                continue;
+            }
+        }
+    }
+    
+    (stdin, stdout, stderr)
+}
+
+fn monitor_child<'a>(child: &'a Child, app: &'a App, connectors: &'a Vec<&'a ConnectorChannel<'a>>) {
+    
+}
+
+fn run_app<'a>(app: &'a App, connectors: &'a Vec<&'a ConnectorChannel<'a>>) -> Result<(), Box<dyn Error>> {
+    let (stdin, stdout, stderr) = must_grab_stdin_out_err(connectors);
+    let mut cmd = Command::new(&app.execution.cmd);
+    let mut process = cmd.kill_on_drop(true);
+    
+    if let Some(args) = &app.execution.args {
+        process = process.args(args);
+    }
+    
+    if stdin {
+        process = process.stdin(Stdio::piped());
+    }
+    
+    if stdout {
+        process = process.stdout(Stdio::piped());
+    }
+    
+    if stderr {
+        process = process.stderr(Stdio::piped());
+    }
+    
+    let child = process.spawn()?;
+    
+    monitor_child(&child, app, connectors);
+    
+    Ok(())
+}
+
+fn run_apps(wf_ctx: &WorkflowCtx, connector_map: HashMap<String, ConnectorChannel>) {
+    let app_map = wf_ctx.workflow.sort_connector_map_by_app(&connector_map);
+
+    for (app, connectors) in &app_map {
+        run_app(app, connectors);
+    }
 }
 
 pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -271,12 +392,12 @@ pub fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Re
     wf_ctx.workflow.verify(&wf_ctx)?;
     wf_ctx.workflow.verify_connections(&wf_ctx)?;
     println!("All app connections verified");
-    
+
     let connector_map = wf_ctx.workflow.setup(&wf_ctx)?;
 
     /* start each app in the map */
-    /* todo: start each app from wf_ctx. Then for each app, create a state machine that sends/reads data for each connector, as specified in the map */
-    
+    run_apps(&wf_ctx, connector_map);
+
     Ok(())
 }
 
