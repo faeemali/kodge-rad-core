@@ -195,7 +195,7 @@ fn find_app(a_apps: Arc<Vec<App>>, app_id: &str) -> Option<App> {
     removes the items from the applied map, and adds them to a new map, aranged by app.
     This is a destruction operation
 */
-pub async fn convert_connector_map_to_sort_by_app(am_connector_map: Arc<Mutex<HashMap<String, ConnectorChannel>>>) -> HashMap<App, Vec<ConnectorChannel>> {
+async fn convert_connector_map_to_sort_by_app(am_connector_map: Arc<Mutex<HashMap<String, ConnectorChannel>>>) -> HashMap<App, Vec<ConnectorChannel>> {
     let mut connector_map_mg = am_connector_map.lock().await;
     let connector_map = connector_map_mg.deref_mut();
 
