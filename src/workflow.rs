@@ -1,26 +1,19 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
-use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
-use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
-use crate::AppCtx;
+use crate::{AppCtx, process};
+use crate::app::{App, AppIoDefinition, load_app};
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::utils::utils::load_yaml;
-
-#[derive(Serialize, Deserialize)]
-pub struct Workflow {
-    pub id: ConfigId,
-    pub apps: Vec<String>,
-    pub connections: Vec<OutIn>,
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct OutIn {
@@ -30,8 +23,18 @@ pub struct OutIn {
     pub input: String,
 }
 
+/* 
+    the io direction from the app's point of view. The typical use case
+    is eg. to read from the app and write to a channel, or read from a channel
+    and write to the app.
+    
+    Since everything is from the app's point of view, reading from the app
+    means we must read from the app's output, therefore the direction
+    will be Out. Similarly, writing to the app means writing to it's input,
+    therefore the direction will be In.
+ */
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum IoDirection {
+pub enum AppIoDirection {
     Out,
     In,
 }
@@ -40,7 +43,7 @@ struct ConnectorHolder<'a> {
     pub app_id: String,
     pub definition: &'a AppIoDefinition,
     pub connected: bool, //has this connection been used?
-    pub direction: IoDirection,
+    pub direction: AppIoDirection,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
@@ -57,14 +60,21 @@ pub struct Message {
 }
 
 //contains a list of connectors, and the channels that must map to them
-struct ConnectorChannel{
+pub struct ConnectorChannel{
     pub app: App,
-    pub direction: IoDirection,
+    pub direction: AppIoDirection,
     pub connector: AppIoDefinition,
 
     //either rx or tx must be used, never both
     pub rx: Option<Receiver<Message>>,
     pub tx: Option<Sender<Message>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Workflow {
+    pub id: ConfigId,
+    pub apps: Vec<String>,
+    pub connections: Vec<OutIn>,
 }
 
 impl Workflow {
@@ -127,19 +137,19 @@ fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashM
         /* we can create a channel between in and out */
         let (tx, rx) = channel(32);
 
-        /* we read from the output, and write to the channel */
+        /* we read from the output (eg. stdout), and write to the channel */
         let out_connector = ConnectorChannel {
             app: out_app.clone(),
-            direction: IoDirection::Out,
+            direction: AppIoDirection::Out,
             connector: out_connector.clone(),
             rx: None,
             tx: Some(tx),
         };
 
-        /* we write to the input, which then does something with the data */
+        /* we read from the receiver and write to the input (stdin), which then does something with the data */
         let in_connector = ConnectorChannel {
             app: in_app.clone(),
-            direction: IoDirection::In,
+            direction: AppIoDirection::In,
             connector: in_connector.clone(),
             rx: Some(rx),
             tx: None,
@@ -219,7 +229,7 @@ async fn convert_connector_map_to_sort_by_app(am_connector_map: Arc<Mutex<HashMa
     app_map
 }
 
-fn __get_connectors<'a>(app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, direction: IoDirection)
+fn __get_connectors<'a>(app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, direction: AppIoDirection)
                         -> Vec<ConnectorHolder<'a>> {
     let mut io_defs = vec![];
     return if let Some(ios) = io_opt {
@@ -239,17 +249,17 @@ fn __get_connectors<'a>(app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, 
     };
 }
 
-fn get_connectors_for_apps<'a>(apps: &'a [App]) -> Vec<ConnectorHolder<'a>> {
+fn get_connectors_for_apps(apps: &[App]) -> Vec<ConnectorHolder> {
     let mut connectors: Vec<ConnectorHolder> = vec![];
     for app in apps {
         let mut input_connectors = __get_connectors(&app.id.id,
-                                                         &app.io.input,
-                                                         IoDirection::In);
+                                                    &app.io.input,
+                                                    AppIoDirection::In);
         connectors.append(&mut input_connectors);
 
         let mut output_connectors = __get_connectors(&app.id.id,
-                                                          &app.io.output,
-                                                          IoDirection::Out);
+                                                     &app.io.output,
+                                                     AppIoDirection::Out);
         connectors.append(&mut output_connectors);
     }
 
@@ -288,7 +298,7 @@ fn get_app_and_connector(outin: &str) -> Result<(String, String), Box<dyn Error>
 fn verify_app_and_connector(connectors: &mut [ConnectorHolder],
                             app_id: &str,
                             connector_id: &str,
-                            direction: IoDirection) -> Result<(), Box<dyn Error>> {
+                            direction: AppIoDirection) -> Result<(), Box<dyn Error>> {
     for connector in connectors {
         if connector.app_id != app_id ||
             connector.direction != direction ||
@@ -310,10 +320,10 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
 
     for outin in &wf_ctx.workflow.connections {
         let (out_app, out_connector) = get_app_and_connector(&outin.output)?;
-        verify_app_and_connector(&mut connectors, &out_app, &out_connector, IoDirection::Out)?;
+        verify_app_and_connector(&mut connectors, &out_app, &out_connector, AppIoDirection::Out)?;
 
         let (in_app, in_connector) = get_app_and_connector(&outin.input)?;
-        verify_app_and_connector(&mut connectors, &in_app, &in_connector, IoDirection::In)?;
+        verify_app_and_connector(&mut connectors, &in_app, &in_connector, AppIoDirection::In)?;
     }
 
     /* scan through the list of connectors for any unused items */
@@ -326,73 +336,29 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
     Ok(())
 }
 
-
-/* checks the list of connectors to see if we must grab stdin, stdout, stderr */
-fn must_grab_stdin_out_err(connector: &Vec<ConnectorChannel>) -> (bool, bool, bool) {
-    let mut stdin = false;
-    let mut stdout = false;
-    let mut stderr = false;
-    for cc in connector {
-        match cc.connector.integration.integration_type.as_str() {
-            STDIN => {
-                stdin = true;
-            }
-            STDOUT => {
-                stdout = true;
-            }
-            STDERR => {
-                stderr = true;
-            }
-            _ => {
-                continue;
-            }
-        }
-    }
-
-    (stdin, stdout, stderr)
-}
-
-async fn run_app(app: App, connectors: Vec<ConnectorChannel>) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let (stdin, stdout, stderr) = must_grab_stdin_out_err(&connectors);
-    let mut cmd = Command::new(&app.execution.cmd);
-    let mut process = cmd.kill_on_drop(true);
-
-    if let Some(args) = &app.execution.args {
-        process = process.args(args);
-    }
-
-    if stdin {
-        process = process.stdin(Stdio::piped());
-    }
-
-    if stdout {
-        process = process.stdout(Stdio::piped());
-    }
-
-    if stderr {
-        process = process.stderr(Stdio::piped());
-    }
-
-    let child = process.spawn()?;
-
-    /* 
-        TODO: must read/write data from the process and tx/rx from the appropriate channel.
-            Most likely need to spawn multiple tasks here 
-    */
-
-    Ok(())
-}
-
-fn run_apps(exec_ctx: ExecutionCtx) {
-    let mut app_map = exec_ctx.app_map;
-    for (key, value) in app_map.drain() {
-        tokio::spawn(run_app(key, value));
-    }
-}
-
 struct ExecutionCtx {
+    pub base_dir: String,
     pub apps: Arc<Vec<App>>,
     pub app_map: HashMap<App, Vec<ConnectorChannel>>
+}
+
+impl ExecutionCtx {
+    /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
+    pub async fn run_apps(&mut self) {
+        let app_map = &mut self.app_map;
+        for (key, value) in app_map.drain() {
+            tokio::spawn(process::run_app_main(self.base_dir.to_string(), key, value));
+        }
+
+        self.monitor_apps().await;
+    }
+
+    async fn monitor_apps(&self) {
+        loop {
+            println!("Workflow running at: {}", chrono::Local::now().to_rfc3339());
+            sleep(Duration::from_millis(1000)).await;
+        }
+    }
 }
 
 pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -420,13 +386,14 @@ pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String])
 
     let app_map = convert_connector_map_to_sort_by_app(am_connector_map.clone()).await;
 
-    let exec_ctx = ExecutionCtx {
+    let mut exec_ctx = ExecutionCtx {
+        base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
         app_map,
     };
 
     /* start each app in the map */
-    run_apps(exec_ctx);
+    exec_ctx.run_apps().await;
 
     Ok(())
 }

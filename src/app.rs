@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::config_common::{ConfigId, KVPair};
 use crate::error::RadError;
 use crate::utils::utils::{get_dirs, load_yaml};
-use crate::workflow::IoDirection;
+use crate::workflow::AppIoDirection;
 
 pub const STDIN: &str = "stdin";
 pub const STDOUT: &str = "stdout";
@@ -132,8 +132,8 @@ impl App {
         };
     }
 
-    pub fn find_connector(&self, id: &str, direction: IoDirection) -> Option<&AppIoDefinition> {
-        return if direction == IoDirection::In {
+    pub fn find_connector(&self, id: &str, direction: AppIoDirection) -> Option<&AppIoDefinition> {
+        return if direction == AppIoDirection::In {
             self.find_connector_by_id(id, &self.io.input)
         } else {
             self.find_connector_by_id(id, &self.io.output)

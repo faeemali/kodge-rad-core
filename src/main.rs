@@ -11,6 +11,7 @@ mod error;
 mod config;
 mod app;
 mod workflow;
+mod process;
 
 pub struct AppCtx {
     pub base_dir: String,
