@@ -1,9 +1,12 @@
 use std::error::Error;
+use std::ops::DerefMut;
 use tokio::process::{Child, ChildStdin, Command, ChildStdout, ChildStderr};
-use std::process::{Stdio};
+use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::app::{App, STDERR, STDIN, STDOUT};
 use crate::error::RadError;
@@ -82,7 +85,12 @@ async fn handle_app_output<T: ProcessReader>(input: &mut T, connector: &mut Conn
     }
 }
 
-async fn manage_running_process(child: &mut Child, app: App, connectors: &mut [ConnectorChannel]) -> Result<bool, Box<dyn Error + Sync + Send>> {
+async fn check_must_die(am_must_die: &Arc<Mutex<bool>>) -> bool {
+    let must_die_mg = am_must_die.lock().await;
+    *must_die_mg
+}
+
+async fn manage_running_process(child: &mut Child, app: App, connectors: &mut [ConnectorChannel], must_die: Arc<Mutex<bool>>) -> Result<ExitStatus, Box<dyn Error + Sync + Send>> {
     loop {
         let mut data_processed = false;
         for connector in connectors.iter_mut() {
@@ -114,9 +122,30 @@ async fn manage_running_process(child: &mut Child, app: App, connectors: &mut [C
             }
         }
 
+        let exit_opt = child.try_wait()?;
+        if let Some(s) = exit_opt {
+            return Ok(s);
+        } //else still running
+
+        if check_must_die(&must_die).await {
+            println!("Caught must die flag. Aborting app: {}", app.id.id);
+
+            /*
+                TODO: 
+                    This issues a sigterm, which may not always be advisable. Consider this
+                    message from a tokio bugpost:                
+                    ```
+                    Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM) 
+                    ```
+             */
+            
+            child.kill().await?;
+            println!("Kill issued for app {}", app.id.id);
+        }
+
         //only sleep if no data was processed
         if !data_processed {
-            sleep(Duration::from_millis(1)).await;
+            sleep(Duration::from_millis(100)).await;
         }
     }
 }
@@ -163,7 +192,7 @@ fn spawn_process(base_dir: &str, app: &App, connectors: &[ConnectorChannel]) -> 
     let (stdin, stdout, stderr) = must_grab_stdin_out_err(connectors);
     
     let path = format!("{}/cache/{}/{}", base_dir, &app.id.id, &app.execution.cmd);
-    let mut cmd = Command::new(&path);
+    let mut cmd = Command::new(path);
     let mut process = cmd.kill_on_drop(true);
 
     if let Some(args) = &app.execution.args {
@@ -186,10 +215,28 @@ fn spawn_process(base_dir: &str, app: &App, connectors: &[ConnectorChannel]) -> 
     Ok(child)
 }
 
-pub async fn run_app_main(base_dir: String, app: App, connectors: Vec<ConnectorChannel>) -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn run_app_main(base_dir: String,
+                          app: App,
+                          connectors: Vec<ConnectorChannel>,
+                          am_must_die: Arc<Mutex<bool>>) -> Result<ExitStatus, Box<dyn Error + Sync + Send>> {
     let mut child = spawn_process(&base_dir, &app, &connectors)?;
     
     let mut mut_connectors = connectors;
-    manage_running_process(&mut child, app.clone(), &mut mut_connectors).await?;
-    Ok(())
+    let exit_status = manage_running_process(&mut child, app.clone(), &mut mut_connectors, am_must_die.clone()).await?;
+    let code = if let Some(c) = exit_status.code() {
+        c
+    } else {
+        -1
+    };
+
+    if exit_status.success() {
+        println!("App {} exited successfully with code: {}", &app.id.id, code);
+    } else {
+        println!("App {} exited, but not successfully, with code: {}", &app.id.id, code);
+    }
+
+    let mut must_die_mg = am_must_die.lock().await;
+    *must_die_mg = true;
+
+    Ok(exit_status)
 }

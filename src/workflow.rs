@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tokio::{select, try_join};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use crate::{AppCtx, process};
@@ -60,7 +63,7 @@ pub struct Message {
 }
 
 //contains a list of connectors, and the channels that must map to them
-pub struct ConnectorChannel{
+pub struct ConnectorChannel {
     pub app: App,
     pub direction: AppIoDirection,
     pub connector: AppIoDefinition,
@@ -107,14 +110,14 @@ fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashM
         let (in_app_id, in_conn_id) = get_app_and_connector(&connection.input)?;
 
         let out_app = match find_app(apps.clone(), &out_app_id) {
-            Some(a) => {a},
+            Some(a) => { a }
             None => {
                 return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
             }
         };
 
-        let in_app = match find_app(apps.clone(),  &in_app_id) {
-            Some(a) => {a},
+        let in_app = match find_app(apps.clone(), &in_app_id) {
+            Some(a) => { a }
             None => {
                 return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
             }
@@ -339,23 +342,41 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
 struct ExecutionCtx {
     pub base_dir: String,
     pub apps: Arc<Vec<App>>,
-    pub app_map: HashMap<App, Vec<ConnectorChannel>>
+    pub app_map: HashMap<App, Vec<ConnectorChannel>>,
+    
+    //if true, the workflow must die. Not using AtomicBool because of a note that says
+    //it's only supported on certain platforms
+    pub must_die: Arc<Mutex<bool>>,
 }
 
 impl ExecutionCtx {
     /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
     pub async fn run_apps(&mut self) {
+
         let app_map = &mut self.app_map;
-        for (key, value) in app_map.drain() {
-            tokio::spawn(process::run_app_main(self.base_dir.to_string(), key, value));
+        for (key, value) in app_map.drain() {   
+            tokio::spawn(process::run_app_main(self.base_dir.to_string(), key, value, self.must_die.clone()));
         }
 
         self.monitor_apps().await;
+        
+        println!("apps terminated");
+    }
+    
+    async fn must_die(&self) -> bool {
+        *self.must_die.lock().await
     }
 
     async fn monitor_apps(&self) {
         loop {
             println!("Workflow running at: {}", chrono::Local::now().to_rfc3339());
+            
+            if self.must_die().await {
+                println!("Workflow detected must_die flag. Aborting after 1s");
+                sleep(Duration::from_millis(1000)).await;
+                break;
+            }
+            
             sleep(Duration::from_millis(1000)).await;
         }
     }
@@ -390,6 +411,7 @@ pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String])
         base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
         app_map,
+        must_die: Arc::new(Mutex::new(false)),
     };
 
     /* start each app in the map */
