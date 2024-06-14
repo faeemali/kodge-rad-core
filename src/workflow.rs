@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::{AppCtx, process};
-use crate::app::{App, AppIoDefinition, load_app};
+use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::utils::utils::load_yaml;
@@ -59,10 +59,23 @@ pub struct ConnectorChannel {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct StdioInOut {
+    #[serde(rename = "in")]
+    pub input: Option<String>,
+
+    #[serde(rename = "out")]
+    pub output: Option<String>,
+
+    #[serde(rename = "err")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct Workflow {
     pub id: ConfigId,
     pub apps: Vec<String>,
     pub connections: Vec<OutIn>,
+    pub stdio: StdioInOut,
 }
 
 impl Workflow {
@@ -75,9 +88,64 @@ impl Workflow {
         Ok(())
     }
 
+    fn __verify_stdin(&self, wf_ctx: &WorkflowCtx, in_name: &str) -> Result<(), Box<dyn Error>> {
+        let app = load_app(&wf_ctx.base_dir, in_name)?;
+
+        /* ensure this app does not have anything connected to its input */
+        if let Some(inputs) = app.io.input {
+            for input in &inputs {
+                if input.integration.integration_type == STDIN {
+                    return Err(Box::new(RadError::from(format!("stdin already used by app {}. Cannot assign io", &app.id.id))));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn __verify_stdout_err(&self, wf_ctx: &WorkflowCtx, in_name: &str, out: bool) -> Result<(), Box<dyn Error>> {
+        let app = load_app(&wf_ctx.base_dir, in_name)?;
+
+        /* ensure this app does not have anything connected to its input */
+        if let Some(outputs) = app.io.output {
+            for output in &outputs {
+                if out {
+                    if output.integration.integration_type == STDOUT {
+                        return Err(Box::new(RadError::from(format!("stdout already used by app {}. Cannot assign io", &app.id.id))));
+                    }
+                } else if output.integration.integration_type == STDERR {
+                    return Err(Box::new(RadError::from(format!("stderr already used by app {}. Cannot assign io", &app.id.id))));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_stdio(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
+        if let Some(name) = &self.stdio.input {
+            self.__verify_stdin(wf_ctx, name)?;
+        }
+
+        if let Some(name) = &self.stdio.output {
+            self.__verify_stdout_err(wf_ctx, name, true)?;
+        }
+
+        if let Some(name) = &self.stdio.error {
+            self.__verify_stdout_err(wf_ctx, name, false)?;
+        }
+
+        Ok(())
+    }
+
     fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
         self.id.print();
+
+        info!("verifying apps");
         self.verify_apps(wf_ctx)?;
+
+        info!("verifying stdio");
+        self.verify_stdio(wf_ctx)?;
         Ok(())
     }
 }
@@ -99,10 +167,10 @@ fn __find_connector<'a>(conn_id: &str, app: &'a App) -> Result<&'a AppIoDefiniti
 
 fn __find_app(apps: Arc<Vec<App>>, app_id: &str, out: bool) -> Result<App, Box<dyn Error>> {
     match find_app(apps, &app_id) {
-        Some(a) => { 
-            Ok(a) 
+        Some(a) => {
+            Ok(a)
         }
-        
+
         None => {
             let out_or_in = if out {
                 "out"
@@ -123,10 +191,10 @@ fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashM
 
         let out_app = __find_app(apps.clone(), &out_app_id, true)?;
         let in_app = __find_app(apps.clone(), &in_app_id, false)?;
-        
+
         let out_connector = __find_connector(&out_conn_id, &out_app)?;
         let in_connector = __find_connector(&in_conn_id, &in_app)?;
-        
+
         /* we can create a channel between in and out */
         let (tx, rx) = channel(32);
 
