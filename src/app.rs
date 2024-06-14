@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::path::Path;
+use log::info;
 use serde::{Deserialize, Serialize};
 use crate::config::config_common::{ConfigId, KVPair};
 use crate::error::RadError;
@@ -65,7 +66,7 @@ impl AppIoDefinition {
 
     pub fn print(&self) {
         self.id.print();
-        println!("Type: {}", self.io_type);
+        info!("Type: {}", self.io_type);
         self.integration.print();
     }
 }
@@ -91,12 +92,12 @@ impl AppIoIntegration {
     }
 
     pub fn print(&self) {
-        println!("Integration:");
-        println!("type: {}", self.integration_type);
+        info!("Integration:");
+        info!("type: {}", self.integration_type);
         if let Some(extras) = &self.extras {
-            println!("Extras:");
+            info!("Extras:");
             for extra in extras {
-                println!("k: {}, v: {}", &extra.key, &extra.value);
+                info!("k: {}, v: {}", &extra.key, &extra.value);
             }
         }
     }

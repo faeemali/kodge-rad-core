@@ -1,3 +1,4 @@
+use log::info;
 use serde::{Deserialize, Serialize};
 use crate::utils::utils::get_value_or_unknown;
 
@@ -13,7 +14,7 @@ impl ConfigId {
         let name = get_value_or_unknown(&self.name);
         let description = get_value_or_unknown(&self.description);
 
-        println!(r#"
+        info!(r#"
     ID->
     id:          {}
     name:        {}

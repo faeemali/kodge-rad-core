@@ -4,6 +4,7 @@ use std::ops::DerefMut;
 use std::process::exit;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use log::{info, warn};
 
 use crate::app::{app_exists, get_all_apps};
 use crate::error::RadError;
@@ -75,7 +76,7 @@ async fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dy
 }
 
 async fn handle_signal(am_must_die: Arc<Mutex<bool>>) {
-    println!("Caught signal. Aborting app");
+    warn!("Caught signal. Aborting app");
     let mut must_die_mg = am_must_die.lock().await;
     let must_die = must_die_mg.deref_mut();
     *must_die = true;
@@ -91,11 +92,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let base_dir = args[1].as_str();
 
-    println!("Application Starting");
-    println!("base_dir: {}", base_dir);
+    log4rs::init_file(format!("{}/log_conf.yaml", base_dir), Default::default())?;
+
+    info!("Application Starting");
+    info!("base_dir: {}", base_dir);
 
     let am_must_die = Arc::new(Mutex::new(false));
-
 
     let app_ctx = AppCtx {
         base_dir: base_dir.to_string(),
@@ -106,6 +108,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
 
     process_cmd(&app_ctx, &args).await?;
-    
+
     Ok(())
 }

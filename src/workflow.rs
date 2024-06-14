@@ -4,6 +4,7 @@ use std::ops::{Deref, DerefMut};
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
+use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
 use tokio::{select, try_join};
@@ -83,7 +84,7 @@ pub struct Workflow {
 impl Workflow {
     fn verify_apps(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
         for app_name in &self.apps {
-            println!("Found app: {}", app_name);
+            info!("Found app: {}", app_name);
             let app = load_app(&wf_ctx.base_dir, app_name)?;
             app.verify()?;
         }
@@ -360,7 +361,7 @@ impl ExecutionCtx {
 
         self.monitor_apps().await;
 
-        println!("apps terminated");
+        warn!("apps terminated");
     }
 
     async fn must_die(&self) -> bool {
@@ -369,10 +370,8 @@ impl ExecutionCtx {
 
     async fn monitor_apps(&self) {
         loop {
-            println!("Workflow running at: {}", chrono::Local::now().to_rfc3339());
-
             if self.must_die().await {
-                println!("Workflow detected must_die flag. Aborting after 1s");
+                warn!("Workflow detected must_die flag. Aborting after 1s");
                 sleep(Duration::from_millis(1000)).await;
                 break;
             }
@@ -400,7 +399,7 @@ pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String])
 
     wf_ctx.workflow.verify(&wf_ctx)?;
     verify_connections(&wf_ctx, a_apps.clone())?;
-    println!("All app connections verified");
+    info!("All app connections verified");
 
     let connector_map = create_channel_io(a_apps.clone(), &wf_ctx.workflow.connections)?;
     let am_connector_map = Arc::new(Mutex::new(connector_map));

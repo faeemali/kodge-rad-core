@@ -4,6 +4,7 @@ use tokio::process::{Child, ChildStdin, Command, ChildStdout, ChildStderr};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+use log::{error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::Mutex;
@@ -128,19 +129,19 @@ async fn manage_running_process(child: &mut Child, app: App, connectors: &mut [C
         } //else still running
 
         if check_must_die(&must_die).await {
-            println!("Caught must die flag. Aborting app: {}", app.id.id);
+            warn!("Caught must die flag. Aborting app: {}", app.id.id);
 
             /*
-                TODO: 
+                TODO:
                     This issues a sigterm, which may not always be advisable. Consider this
-                    message from a tokio bugpost:                
+                    message from a tokio bugpost:
                     ```
-                    Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM) 
+                    Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM)
                     ```
              */
-            
+
             child.kill().await?;
-            println!("Kill issued for app {}", app.id.id);
+            warn!("Kill issued for app {}", app.id.id);
         }
 
         //only sleep if no data was processed
@@ -230,9 +231,9 @@ pub async fn run_app_main(base_dir: String,
     };
 
     if exit_status.success() {
-        println!("App {} exited successfully with code: {}", &app.id.id, code);
+        info!("App {} exited successfully with code: {}", &app.id.id, code);
     } else {
-        println!("App {} exited, but not successfully, with code: {}", &app.id.id, code);
+        error!("App {} exited, but not successfully, with code: {}", &app.id.id, code);
     }
 
     let mut must_die_mg = am_must_die.lock().await;
