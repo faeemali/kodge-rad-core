@@ -343,7 +343,7 @@ struct ExecutionCtx {
     pub base_dir: String,
     pub apps: Arc<Vec<App>>,
     pub app_map: HashMap<App, Vec<ConnectorChannel>>,
-    
+
     //if true, the workflow must die. Not using AtomicBool because of a note that says
     //it's only supported on certain platforms
     pub must_die: Arc<Mutex<bool>>,
@@ -354,15 +354,15 @@ impl ExecutionCtx {
     pub async fn run_apps(&mut self) {
 
         let app_map = &mut self.app_map;
-        for (key, value) in app_map.drain() {   
+        for (key, value) in app_map.drain() {
             tokio::spawn(process::run_app_main(self.base_dir.to_string(), key, value, self.must_die.clone()));
         }
 
         self.monitor_apps().await;
-        
+
         println!("apps terminated");
     }
-    
+
     async fn must_die(&self) -> bool {
         *self.must_die.lock().await
     }
@@ -370,13 +370,13 @@ impl ExecutionCtx {
     async fn monitor_apps(&self) {
         loop {
             println!("Workflow running at: {}", chrono::Local::now().to_rfc3339());
-            
+
             if self.must_die().await {
                 println!("Workflow detected must_die flag. Aborting after 1s");
                 sleep(Duration::from_millis(1000)).await;
                 break;
             }
-            
+
             sleep(Duration::from_millis(1000)).await;
         }
     }
@@ -411,7 +411,7 @@ pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String])
         base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
         app_map,
-        must_die: Arc::new(Mutex::new(false)),
+        must_die: app_ctx.must_die.clone(),
     };
 
     /* start each app in the map */

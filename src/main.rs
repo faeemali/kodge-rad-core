@@ -1,6 +1,9 @@
 use std::env::args;
 use std::error::Error;
+use std::ops::DerefMut;
 use std::process::exit;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::app::{app_exists, get_all_apps};
 use crate::error::RadError;
@@ -15,6 +18,7 @@ mod process;
 
 pub struct AppCtx {
     pub base_dir: String,
+    pub must_die: Arc<Mutex<bool>>,
 }
 
 fn show_help(app_name: &str) {
@@ -70,6 +74,13 @@ async fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dy
     Ok(())
 }
 
+async fn handle_signal(am_must_die: Arc<Mutex<bool>>) {
+    println!("Caught signal. Aborting app");
+    let mut must_die_mg = am_must_die.lock().await;
+    let must_die = must_die_mg.deref_mut();
+    *must_die = true;
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = args().collect();
@@ -83,11 +94,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Application Starting");
     println!("base_dir: {}", base_dir);
 
+    let am_must_die = Arc::new(Mutex::new(false));
+
+
     let app_ctx = AppCtx {
         base_dir: base_dir.to_string(),
+        must_die: am_must_die.clone(),
     };
 
-    process_cmd(&app_ctx, &args).await?;
+    let am_must_die_clone = am_must_die.clone();
+    ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
 
+    process_cmd(&app_ctx, &args).await?;
+    
     Ok(())
 }
