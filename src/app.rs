@@ -28,7 +28,7 @@ pub struct AppIoInOut {
 
 impl AppIoInOut {
     pub fn verify(&self) -> Result<(), Box<dyn Error>> {
-        if let Some(input) = &self.input { 
+        if let Some(input) = &self.input {
             for io in input {
                 io.verify(true)?;
             }
@@ -47,7 +47,7 @@ impl AppIoInOut {
 #[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct AppIoDefinition {
     pub id: ConfigId,
-    #[serde(rename="type")]
+    #[serde(rename = "type")]
     pub io_type: String,
     pub integration: AppIoIntegration,
 }
@@ -58,7 +58,7 @@ impl AppIoDefinition {
         if self.io_type != "single" {
             return Err(Box::from("Invalid IO type"));
         }
-        
+
         self.integration.verify(input)?;
 
         Ok(())
@@ -117,8 +117,9 @@ impl App {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn find_connector_by_id<'a>(&self, id: &str, ios: &'a Option<Vec<AppIoDefinition>>) -> Option<&'a AppIoDefinition> {
-        return match ios {
+        match ios {
             Some(s) => {
                 for def in s {
                     if def.id.id == id {
@@ -128,17 +129,18 @@ impl App {
                 None
             }
             None => {
-               None
+                None
             }
-        };
+        }
     }
 
+    #[allow(dead_code)]
     pub fn find_connector(&self, id: &str, direction: AppIoDirection) -> Option<&AppIoDefinition> {
         return if direction == AppIoDirection::In {
             self.find_connector_by_id(id, &self.io.input)
         } else {
             self.find_connector_by_id(id, &self.io.output)
-        }
+        };
     }
 }
 
@@ -163,7 +165,7 @@ pub fn app_exists(base_dir: &str, app_name: &str) -> Result<bool, Box<dyn Error>
     let apps = get_all_apps(base_dir)?;
     for app in &apps {
         if app == app_name {
-            return Ok(true)
+            return Ok(true);
         }
     }
     Ok(false)

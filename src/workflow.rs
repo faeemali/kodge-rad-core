@@ -47,12 +47,6 @@ struct ConnectorHolder<'a> {
     pub direction: AppIoDirection,
 }
 
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub enum MessageTypes {
-    Process,
-    Kill,
-}
-
 //contains a list of connectors, and the channels that must map to them
 pub struct ConnectorChannel {
     pub app: App,
@@ -93,6 +87,33 @@ pub struct WorkflowCtx {
     pub workflow: Workflow,
 }
 
+fn __find_connector<'a>(conn_id: &str, app: &'a App) -> Result<&'a AppIoDefinition, Box<dyn Error>> {
+    let connector = match find_connector_in_app(conn_id, app) {
+        Some(c) => c,
+        None => {
+            return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &conn_id, &app.id.id))));
+        }
+    };
+    Ok(connector)
+}
+
+fn __find_app(apps: Arc<Vec<App>>, app_id: &str, out: bool) -> Result<App, Box<dyn Error>> {
+    match find_app(apps, &app_id) {
+        Some(a) => { 
+            Ok(a) 
+        }
+        
+        None => {
+            let out_or_in = if out {
+                "out"
+            } else {
+                "in"
+            };
+            Err(Box::new(RadError::from(format!("App {} not found ({}) (Unexpected)", &app_id, out_or_in))))
+        }
+    }
+}
+
 //creates channels between all outputs and inputs from the workflow
 fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashMap<String, ConnectorChannel>, Box<dyn Error>> {
     let mut map = HashMap::new();
@@ -100,34 +121,12 @@ fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashM
         let (out_app_id, out_conn_id) = get_app_and_connector(&connection.output)?;
         let (in_app_id, in_conn_id) = get_app_and_connector(&connection.input)?;
 
-        let out_app = match find_app(apps.clone(), &out_app_id) {
-            Some(a) => { a }
-            None => {
-                return Err(Box::new(RadError::from(format!("App {} not found (out) (Unexpected)", &out_app_id))));
-            }
-        };
-
-        let in_app = match find_app(apps.clone(), &in_app_id) {
-            Some(a) => { a }
-            None => {
-                return Err(Box::new(RadError::from(format!("App {} not found (in) (Unexpected)", &in_app_id))));
-            }
-        };
-
-        let out_connector = match find_connector_in_app(&out_conn_id, &out_app) {
-            Some(c) => c,
-            None => {
-                return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &out_conn_id, &out_app_id))));
-            }
-        };
-
-        let in_connector = match find_connector_in_app(&in_conn_id, &in_app) {
-            Some(c) => c,
-            None => {
-                return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &in_conn_id, &in_app_id))));
-            }
-        };
-
+        let out_app = __find_app(apps.clone(), &out_app_id, true)?;
+        let in_app = __find_app(apps.clone(), &in_app_id, false)?;
+        
+        let out_connector = __find_connector(&out_conn_id, &out_app)?;
+        let in_connector = __find_connector(&in_conn_id, &in_app)?;
+        
         /* we can create a channel between in and out */
         let (tx, rx) = channel(32);
 
