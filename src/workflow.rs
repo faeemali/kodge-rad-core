@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
-use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
-use tokio::{select, try_join};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use crate::{AppCtx, process};
@@ -56,13 +53,6 @@ pub enum MessageTypes {
     Kill,
 }
 
-//for messages sent across channels
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub struct Message {
-    pub msg_type: MessageTypes,
-    pub data: Vec<u8>,
-}
-
 //contains a list of connectors, and the channels that must map to them
 pub struct ConnectorChannel {
     pub app: App,
@@ -70,8 +60,8 @@ pub struct ConnectorChannel {
     pub connector: AppIoDefinition,
 
     //either rx or tx must be used, never both
-    pub rx: Option<Receiver<Message>>,
-    pub tx: Option<Sender<Message>>,
+    pub rx: Option<Receiver<Vec<u8>>>,
+    pub tx: Option<Sender<Vec<u8>>>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::app::{App, STDERR, STDIN, STDOUT};
 use crate::error::RadError;
-use crate::workflow::{ConnectorChannel, Message, MessageTypes};
+use crate::workflow::{ConnectorChannel, MessageTypes};
 
 fn must_grab_stdin_out_err(connector: &[ConnectorChannel]) -> (bool, bool, bool) {
     let mut stdin = false;
@@ -56,7 +56,7 @@ async fn handle_app_input<T: ProcessWriter>(output: &mut T, connector: &mut Conn
         /* TODO: do something with msg_type here */
 
         /* write to stdin */
-        output.write(&data.data).await?;
+        output.write(&data).await?;
 
         Ok(true)
     } else {
@@ -67,7 +67,8 @@ async fn handle_app_input<T: ProcessWriter>(output: &mut T, connector: &mut Conn
 /*
     This handles output FROM the application. This means we will READ from the application output.
  */
-async fn handle_app_output<T: ProcessReader>(input: &mut T, connector: &mut ConnectorChannel) -> Result<bool, Box<dyn Error + Send + Sync>> {
+async fn handle_app_output<T: ProcessReader>(input: &mut T, 
+                                             connector: &mut ConnectorChannel) -> Result<bool, Box<dyn Error + Send + Sync>> {
     if let Some(tx) = &mut connector.tx {
         let data = input.read().await?;
         if data.is_empty() {
@@ -75,10 +76,7 @@ async fn handle_app_output<T: ProcessReader>(input: &mut T, connector: &mut Conn
         }
 
         /* write to channel */
-        tx.send(Message {
-            msg_type: MessageTypes::Process,
-            data,
-        }).await?;
+        tx.send(data).await?;
 
         Ok(true)
     } else {
