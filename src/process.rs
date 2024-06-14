@@ -8,6 +8,7 @@ use std::time::Duration;
 use log::{error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio::task::yield_now;
 use tokio::time::sleep;
 use crate::app::{App, STDERR, STDIN, STDOUT};
 use crate::workflow::{ConnectorChannel, StdioHolder};
@@ -81,10 +82,12 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
         let mut b = [0u8; 1024];
 
         loop {
-            let mut child_mg = am_child.lock().await;
-            let child = child_mg.deref_mut();
+            let mut data_processed = false;
 
             if output_type == STDOUT {
+                let mut child_mg = am_child.lock().await;
+                let child = child_mg.deref_mut();
+
                 if let Some(s) = &mut child.stdout {
                     let res = s.read(&mut b).await;
                     if let Ok(size) = res {
@@ -93,23 +96,36 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
                             error!("Error sending data to stdout channel for connector {}", &m_connector.connector.id.id);
                             break;
                         }
+
+                        data_processed = true;
                     } else {
                         error!("Error reading from stdout for connector {}", &m_connector.connector.id.id);
                         break;
                     }
                 }
-            } else if let Some(s) = &mut child.stderr {
-                let res = s.read(&mut b).await;
-                if let Ok(size) = res {
-                    let send_res = tx.send(b[0..size].to_vec()).await;
-                    if send_res.is_err() {
-                        error!("Error sending data to stderr channel for connector {}", &m_connector.connector.id.id);
+            } else {
+                let mut child_mg = am_child.lock().await;
+                let child = child_mg.deref_mut();
+
+                if let Some(s) = &mut child.stderr {
+                    let res = s.read(&mut b).await;
+                    if let Ok(size) = res {
+                        let send_res = tx.send(b[0..size].to_vec()).await;
+                        if send_res.is_err() {
+                            error!("Error sending data to stderr channel for connector {}", &m_connector.connector.id.id);
+                            break;
+                        }
+
+                        data_processed = true;
+                    } else {
+                        error!("Error reading from stderr for connector {}", &m_connector.connector.id.id);
                         break;
                     }
-                } else {
-                    error!("Error reading from stderr for connector {}", &m_connector.connector.id.id);
-                    break;
                 }
+            }
+
+            if !data_processed {
+                sleep(Duration::from_millis(1)).await;
             }
         }
     } else {
@@ -120,9 +136,33 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
     error!("Channel ({}) terminated for connector: {}", output_type, &m_connector.connector.id.id);
 }
 
-async fn check_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
+async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
     let must_die_mg = am_must_die.lock().await;
     *must_die_mg
+}
+
+async fn check_must_die(am_child: Arc<Mutex<Child>>, am_must_die: Arc<Mutex<bool>>, app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>>{
+    if !__get_must_die(am_must_die).await {
+        return Ok(())
+    }
+    warn!("Caught must die flag. Aborting app: {}", app_id);
+
+    /*
+        TODO:
+            This issues a sigterm, which may not always be advisable. Consider this
+            message from a tokio bugpost:
+            ```
+            Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM)
+            ```
+     */
+
+    let mut child_mg = am_child.lock().await;
+    let child = child_mg.deref_mut();
+
+    child.kill().await?;
+    warn!("Kill issued for app {}", app_id);
+
+     Ok(())
 }
 
 async fn start_connector_tasks(am_child: Arc<Mutex<Child>>, am_connectors: Arc<Mutex<Vec<ConnectorChannel>>>, app: &App) {
@@ -180,12 +220,14 @@ async fn __handle_stdin_passthrough(am_child: Arc<Mutex<Child>>, app_id: String)
 
 async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id: String, out: bool) {
     let mut b = [0u8; 1024];
-
     loop {
+        let mut data_processed = false;
+
         /* read from app's stdio, pass to main stdio */
-        let mut child_mg = am_child.lock().await;
-        let child = child_mg.deref_mut();
         if out {
+            let mut child_mg = am_child.lock().await;
+            let child = child_mg.deref_mut();
+
             if let Some(stdout) = &mut child.stdout {
                 let size_res = AsyncReadExt::read(stdout, &mut b).await;
                 if let Ok(size) = size_res {
@@ -194,11 +236,12 @@ async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id:
                         break;
                     }
 
-                    let res = std::io::stdout().write_all(&b[0..size].to_vec());
+                    let res = std::io::stdout().write_all(&b[0..size]);
                     if let Err(e) = res {
                         error!("Error writing to stdout (passthrough): {}", e);
                         break;
                     }
+                    data_processed = true;
                 } else {
                     error!("error reading from child's stdout (passthrough)");
                     break;
@@ -207,25 +250,36 @@ async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id:
                 error!("stdout not available for app {}. passthrough (stdout) not possible", app_id);
                 break;
             }
-        } else if let Some(stderr) = &mut child.stderr {
-            let size_res = AsyncReadExt::read(stderr, &mut b).await;
-            if let Ok(size) = size_res {
-                if size == 0 {
-                    error!("Aborting due to EOF from child stderr (passthrough");
-                    break;
-                }
+        } else {
+            let mut child_mg = am_child.lock().await;
+            let child = child_mg.deref_mut();
 
-                let res = std::io::stderr().write_all(&b[0..size].to_vec());
-                if let Err(e) = res {
-                    error!("Error writing to stderr (passthrough): {}", e);
+            if let Some(stderr) = &mut child.stderr {
+                let size_res = AsyncReadExt::read(stderr, &mut b).await;
+                if let Ok(size) = size_res {
+                    if size == 0 {
+                        error!("Aborting due to EOF from child stderr (passthrough");
+                        break;
+                    }
+
+                    let res = std::io::stderr().write_all(&b[0..size]);
+                    if let Err(e) = res {
+                        error!("Error writing to stderr (passthrough): {}", e);
+                        break;
+                    }
+
+                    data_processed = true;
+                } else {
+                    error!("Error reading child's stderr (passthrough)");
                     break;
                 }
             } else {
-                error!("Error reading child's stderr (passthrough)");
-                break;
+                error!("stderr not available for app {}. passthrough (stderr) not possible", app_id);
             }
-        } else {
-            error!("stderr not available for app {}. passthrough (stderr) not possible", app_id);
+        }
+
+        if !data_processed {
+            sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -247,66 +301,71 @@ async fn start_passthrough_tasks(child: Arc<Mutex<Child>>, stdio: StdioHolder, a
     }
 }
 
-async fn __check_app_exit(am_child: Arc<Mutex<Child>>) -> Result<Option<ExitStatus>, Box<dyn Error + Sync + Send>> {
+async fn __check_app_exit(am_child: Arc<Mutex<Child>>, app_id: &str) -> Result<Option<ExitStatus>, Box<dyn Error + Sync + Send>> {
+    if app_id == "input1" {
+        println!("checking app exit for input1");
+    }
     let mut child_mg = am_child.lock().await;
     let child = child_mg.deref_mut();
 
-    let exit_opt = child.try_wait()?;
+    if app_id == "input1" {
+        println!("gh7 input1");
+    }
+
+
+    let exit_opt_res = child.try_wait();
+    if let Err(e) = exit_opt_res {
+        error!("Error checking if app {} exited: {}", app_id, &e);
+        return Err(Box::new(e));
+    }
+
+    let exit_opt = exit_opt_res.unwrap();
     if let Some(s) = exit_opt {
+        if app_id == "input1" {
+            println!("gh7.1 input1");
+        }
+
         return Ok(Some(s));
     } //else still running
-    
+
+    if app_id == "input1" {
+        println!("gh7.2 input1");
+    }
+
     Ok(None)
 }
 
-async fn manage_running_process(am_child: Arc<Mutex<Child>>,
-                                app: App,
-                                connectors: Arc<Mutex<Vec<ConnectorChannel>>>,
-                                stdio: StdioHolder,
-                                must_die: Arc<Mutex<bool>>) -> Result<ExitStatus, Box<dyn Error + Sync + Send>> {
-
-    start_connector_tasks(am_child.clone(), connectors.clone(), &app).await;
-    start_passthrough_tasks(am_child.clone(), stdio, &app).await;
-
-    info!("Monitoring app: {}", &app.id.id);
+async fn check_exit_task(am_child: Arc<Mutex<Child>>, am_must_die: Arc<Mutex<bool>>, app_id: String) {
     loop {
-        if app.id.id == "input1" {
-            println!("gh1 {}", &app.id.id);
-        }
-        
-        let exit_res = __check_app_exit(am_child.clone()).await?;
-        if let Some(s) = exit_res {
-            return Ok(s);
-        }      
-    
-        if app.id.id == "input1" {
-            println!("gh2 {}", &app.id.id);
+        println!("app_id: {}", &app_id);
+
+        let exit_res = __check_app_exit(am_child.clone(), &app_id).await;
+        if let Err(e) = exit_res {
+            error!("Error checking app exit. Aborting. Error: {}", e);
+            break;
         }
 
-        if check_must_die(must_die.clone()).await {
-            warn!("Caught must die flag. Aborting app: {}", app.id.id);
-
-            /*
-                TODO:
-                    This issues a sigterm, which may not always be advisable. Consider this
-                    message from a tokio bugpost:
-                    ```
-                    Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM)
-                    ```
-             */
-
-            let mut child_mg = am_child.lock().await;
-            let child = child_mg.deref_mut();
-            
-            child.kill().await?;
-            warn!("Kill issued for app {}", app.id.id);
+        let exit_opt = exit_res.unwrap();
+        if let Some(s) = exit_opt {
+            let code = if let Some(c) = s.code() {
+                c
+            } else {
+                -1
+            };
+            warn!("app {} exiting. Got status: {}", &app_id, code);
+            set_must_die(am_must_die.clone()).await;
+            break;
         }
 
-        if app.id.id == "input1" {
-            println!("gh3 {}", &app.id.id);
+        let must_die_res = check_must_die(am_child.clone(), am_must_die.clone(), &app_id).await;
+        if let Err(e) = must_die_res {
+            error!("Error checking if must die. Error: {}", &e);
+            set_must_die(am_must_die.clone()).await;
         }
 
-        sleep(Duration::from_millis(100)).await;
+        println!("gh3 {}", &app_id);
+
+        sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -340,31 +399,26 @@ fn spawn_process(base_dir: &str,
     Ok(child)
 }
 
+async fn set_must_die(am_must_die: Arc<Mutex<bool>>) {
+    let mut must_die_mg = am_must_die.lock().await;
+    let must_die = must_die_mg.deref_mut();
+    *must_die = true;
+}
+
 pub async fn run_app_main(base_dir: String,
                           app: App,
                           connectors: Vec<ConnectorChannel>,
                           stdio: StdioHolder,
-                          am_must_die: Arc<Mutex<bool>>) -> Result<ExitStatus, Box<dyn Error + Sync + Send>> {
+                          am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
     let child = spawn_process(&base_dir, &app, &connectors, &stdio)?;
     let am_child = Arc::new(Mutex::new(child));
 
     let am_connectors = Arc::new(Mutex::new(connectors));
-    let exit_status = manage_running_process(am_child, app.clone(), am_connectors, stdio, am_must_die.clone()).await?;
-    let code = if let Some(c) = exit_status.code() {
-        c
-    } else {
-        -1
-    };
 
-    if exit_status.success() {
-        info!("App {} exited successfully with code: {}", &app.id.id, code);
-    } else {
-        error!("App {} exited, but not successfully, with code: {}", &app.id.id, code);
-    }
+    start_connector_tasks(am_child.clone(), am_connectors.clone(), &app).await;
+    start_passthrough_tasks(am_child.clone(), stdio, &app).await;
+    tokio::spawn(check_exit_task(am_child.clone(), am_must_die.clone(), app.id.id.to_string()));
 
-    let mut must_die_mg = am_must_die.lock().await;
-    *must_die_mg = true;
-
-    Ok(exit_status)
+    Ok(())
 }
