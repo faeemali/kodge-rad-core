@@ -1,0 +1,9 @@
+- make stdin+stdout available from terminal (link main app's stdin/out to specified app)
+- verify only one app, if any, can be used for stdin or stdout
+- all support for TCP/IP integration (client only?, server only?, both?)
+- add apps
+- build extra connectors eg. one->many splits
+- maybe add a runtime file for later termination of apps
+- build a ui
+- build server framework to download apps from the web (plugin framework)
+- add in licensing support
