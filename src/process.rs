@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use log::{error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::select;
 use tokio::sync::Mutex;
 use tokio::task::yield_now;
 use tokio::time::sleep;
@@ -94,14 +95,24 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
             let mut data_processed = false;
 
             if output_type == STDOUT {
-                println!("stdout (app_output) getting lock");
                 let mut child_mg = am_child.lock().await;
                 let child = child_mg.deref_mut();
-                println!("app output got lock");
 
+                //println!("reading from stdout");
                 if let Some(s) = &mut child.stdout {
-                    let res = s.read(&mut b).await;
+                    let res = select! {
+                        res = s.read(&mut b) => {
+                            res
+                        }
+                        _ = sleep(Duration::from_micros(100)) => {
+                            yield_now().await;
+                            continue;
+                        }
+                    };
+
                     if let Ok(size) = res {
+                        println!("read {} bytes from output", size);
+
                         let send_res = tx.send(b[0..size].to_vec()).await;
                         if send_res.is_err() {
                             error!("Error sending data to stdout channel for connector {}", &m_connector.connector.id.id);
@@ -119,7 +130,16 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
                 let child = child_mg.deref_mut();
 
                 if let Some(s) = &mut child.stderr {
-                    let res = s.read(&mut b).await;
+                    let res = select! {
+                        res = s.read(&mut b) => {
+                            res
+                        }
+                        _ = sleep(Duration::from_micros(100)) => {
+                            yield_now().await;
+                            continue;
+                        }
+                    };
+
                     if let Ok(size) = res {
                         let send_res = tx.send(b[0..size].to_vec()).await;
                         if send_res.is_err() {
