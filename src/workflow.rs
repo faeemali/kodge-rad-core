@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref};
 use std::sync::Arc;
 use std::time::Duration;
 use log::{info, warn};
@@ -10,10 +10,11 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
-use crate::{AppCtx, process};
+use crate::{AppCtx};
 use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
+use crate::process::run_app_main;
 use crate::utils::utils::load_yaml;
 
 #[derive(Serialize, Deserialize)]
@@ -58,7 +59,7 @@ pub struct ConnectorChannel {
     pub tx: Option<Sender<Vec<u8>>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct StdioInOut {
     #[serde(rename = "in")]
     pub input: Option<String>,
@@ -263,21 +264,18 @@ fn find_app(a_apps: Arc<Vec<App>>, app_id: &str) -> Option<App> {
 }
 
 /*
-    removes the items from the applied map, and adds them to a new map, aranged by app.
-    This is a destruction operation
+    removes the items from the supplied map, and adds them to a new map, arranged by app.
+    This is a destructive operation
 */
-async fn convert_connector_map_to_sort_by_app(am_connector_map: Arc<Mutex<HashMap<String, ConnectorChannel>>>) -> HashMap<App, Vec<ConnectorChannel>> {
-    let mut connector_map_mg = am_connector_map.lock().await;
-    let connector_map = connector_map_mg.deref_mut();
-
+async fn convert_connector_map_to_sort_by_app(connector_map: HashMap<String, ConnectorChannel>) -> HashMap<App, Vec<ConnectorChannel>> {
     let mut app_map = HashMap::new();
 
     let mut keys = vec![];
     connector_map.keys().for_each(|k| keys.push(k.to_string()));
 
-    let cm = connector_map;
-    for key in keys {
-        let v = cm.remove(&key).unwrap();
+    let mut cm = connector_map;
+    for key in &keys {
+        let v = cm.remove(key).unwrap();
 
         if !app_map.contains_key(&v.app) {
             app_map.insert(v.app.clone(), vec![v]);
@@ -402,6 +400,8 @@ struct ExecutionCtx {
     pub apps: Arc<Vec<App>>,
     pub app_map: HashMap<App, Vec<ConnectorChannel>>,
 
+    pub stdio: StdioInOut,
+
     //if true, the workflow must die. Not using AtomicBool because of a note that says
     //it's only supported on certain platforms
     pub must_die: Arc<Mutex<bool>>,
@@ -413,7 +413,11 @@ impl ExecutionCtx {
 
         let app_map = &mut self.app_map;
         for (key, value) in app_map.drain() {
-            tokio::spawn(process::run_app_main(self.base_dir.to_string(), key, value, self.must_die.clone()));
+            tokio::spawn(run_app_main(self.base_dir.to_string(),
+                                      key,
+                                      value,
+                                      self.stdio.clone(),
+                                      self.must_die.clone()));
         }
 
         self.monitor_apps().await;
@@ -459,14 +463,13 @@ pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String])
     info!("All app connections verified");
 
     let connector_map = create_channel_io(a_apps.clone(), &wf_ctx.workflow.connections)?;
-    let am_connector_map = Arc::new(Mutex::new(connector_map));
-
-    let app_map = convert_connector_map_to_sort_by_app(am_connector_map.clone()).await;
+    let app_map = convert_connector_map_to_sort_by_app(connector_map).await;
 
     let mut exec_ctx = ExecutionCtx {
         base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
         app_map,
+        stdio: wf_ctx.workflow.stdio,
         must_die: app_ctx.must_die.clone(),
     };
 

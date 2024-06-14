@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::app::{App, STDERR, STDIN, STDOUT};
 use crate::error::RadError;
-use crate::workflow::{ConnectorChannel};
+use crate::workflow::{ConnectorChannel, StdioInOut};
 
 fn must_grab_stdin_out_err(connector: &[ConnectorChannel]) -> (bool, bool, bool) {
     let mut stdin = false;
@@ -186,9 +186,12 @@ impl ProcessWriter for ChildStdin {
     }
 }
 
-fn spawn_process(base_dir: &str, app: &App, connectors: &[ConnectorChannel]) -> Result<Child, Box<dyn Error + Sync + Send>> {
+fn spawn_process(base_dir: &str,
+                 app: &App,
+                 connectors: &[ConnectorChannel],
+                 stdio: StdioInOut) -> Result<Child, Box<dyn Error + Sync + Send>> {
     let (stdin, stdout, stderr) = must_grab_stdin_out_err(connectors);
-    
+
     let path = format!("{}/cache/{}/{}", base_dir, &app.id.id, &app.execution.cmd);
     let mut cmd = Command::new(path);
     let mut process = cmd.kill_on_drop(true);
@@ -208,6 +211,12 @@ fn spawn_process(base_dir: &str, app: &App, connectors: &[ConnectorChannel]) -> 
     if stderr {
         process = process.stderr(Stdio::piped());
     }
+    
+    /* must we connect the main app's stdin/out/err to this app? */
+    if let Some(stdin) = stdio.input {
+        if app.id.id == stdin {
+        }
+    }
 
     let child = process.spawn()?;
     Ok(child)
@@ -216,9 +225,10 @@ fn spawn_process(base_dir: &str, app: &App, connectors: &[ConnectorChannel]) -> 
 pub async fn run_app_main(base_dir: String,
                           app: App,
                           connectors: Vec<ConnectorChannel>,
+                          stdio: StdioInOut,
                           am_must_die: Arc<Mutex<bool>>) -> Result<ExitStatus, Box<dyn Error + Sync + Send>> {
-    let mut child = spawn_process(&base_dir, &app, &connectors)?;
-    
+    let mut child = spawn_process(&base_dir, &app, &connectors, stdio)?;
+
     let mut mut_connectors = connectors;
     let exit_status = manage_running_process(&mut child, app.clone(), &mut mut_connectors, am_must_die.clone()).await?;
     let code = if let Some(c) = exit_status.code() {
