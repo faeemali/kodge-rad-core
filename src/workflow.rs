@@ -395,6 +395,14 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
     Ok(())
 }
 
+/* used to link some app's stdin/out/err with the main app's stdin/out/err */
+#[derive(Clone, Copy)]
+pub struct StdioHolder {
+    pub input: bool,
+    pub output: bool,
+    pub error: bool,
+}
+
 struct ExecutionCtx {
     pub base_dir: String,
     pub apps: Arc<Vec<App>>,
@@ -410,13 +418,47 @@ struct ExecutionCtx {
 impl ExecutionCtx {
     /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
     pub async fn run_apps(&mut self) {
-
         let app_map = &mut self.app_map;
-        for (key, value) in app_map.drain() {
+        for (app, connectors) in app_map.drain() {
+            let mut use_stdio = StdioHolder {
+                input: false,
+                output: false,
+                error: false,
+            };
+
+            /*
+                note, checks should already have been performed to ensure stdin/out/err
+                are free for use at the verify stage
+             */
+
+            if let Some(app_in) = &self.stdio.input {
+                if app_in == &app.id.id {
+                    /* we need to connect the main app's stdin to this app */
+                    info!("Using terminal stdin for app {}", app_in);
+                   use_stdio.input = true;
+                }
+            }
+
+            if let Some(app_out) = &self.stdio.output {
+                if app_out == &app.id.id {
+                    /* connect this app's stdout to the main app */
+                    info!("Using terminal stdout for app {}", app_out);
+                    use_stdio.output = true;
+                }
+            }
+
+            if let Some(app_err) = &self.stdio.error {
+                if app_err == &app.id.id {
+                    /* connect this app's stderr to the main app */
+                    info!("Using terminal stderr for app {}", app_err);
+                    use_stdio.error = true;
+                }
+            }
+
             tokio::spawn(run_app_main(self.base_dir.to_string(),
-                                      key,
-                                      value,
-                                      self.stdio.clone(),
+                                      app,
+                                      connectors,
+                                      use_stdio,
                                       self.must_die.clone()));
         }
 

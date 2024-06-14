@@ -1,7 +1,6 @@
 #!/bin/bash
 
-while true;
+while read line;
 do
-	date	
-	sleep 1
+	echo ${line}	
 done

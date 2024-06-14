@@ -20,7 +20,11 @@ stdio:
   #specify to which apps, if any, stdin and stdout should be connected.
   #this is dfferent from connections because connections are from output to input.
   #this is from input->app, or app->output
+  #
+  # if in/out/err is specified here, the corresponding app cannot have a connector
+  # for the stdin/stdout/stderr specified
   in: input1
   out: null
+  err: null
 
   
