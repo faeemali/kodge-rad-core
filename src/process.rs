@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use tokio::task::yield_now;
 use tokio::time::sleep;
 use crate::app::{App, STDERR, STDIN, STDOUT};
+use crate::error::RadError;
 use crate::workflow::{ConnectorChannel, StdioHolder};
 
 fn must_grab_stdin_out_err(connector: &[ConnectorChannel]) -> (bool, bool, bool) {
@@ -40,7 +41,10 @@ fn must_grab_stdin_out_err(connector: &[ConnectorChannel]) -> (bool, bool, bool)
 /*
     this handles input TO an application. This means we will WRITE to the application input.
  */
-async fn handle_app_input(am_child: Arc<Mutex<Child>>, connector: ConnectorChannel, input_type: &str) {
+async fn handle_app_input(am_child: Arc<Mutex<Child>>,
+                          connector: ConnectorChannel,
+                          input_type: &str,
+                          am_must_die: Arc<Mutex<bool>>) {
     let mut m_connector = connector;
 
     /* read from the receiver, write to stdin */
@@ -51,23 +55,27 @@ async fn handle_app_input(am_child: Arc<Mutex<Child>>, connector: ConnectorChann
                 /* write to stdin */
                 if input_type == STDIN {
                     /* write to stdin of the app */
+                    println!("handle_app_input getting lock");
                     let mut child_mg = am_child.lock().await;
                     let child = child_mg.deref_mut();
+                    println!("handle_app_input got lock");
                     if let Some(s) = &mut child.stdin {
                         if s.write_all(&data).await.is_err() {
                             break;
                         }
                     }
                 }
+            } else {
+                error!("rx channel closed for connector: {}", &m_connector.connector.id.id);
+                break;
             }
-        }
+        } //loop
     } else {
-        /* TODO: abort here */
         error!("rx channel non-existent for connector: {}", &m_connector.connector.id.id);
     }
 
-    /* TODO: abort */
     warn!("stdin task shutting down for channel: {}", &m_connector.connector.id.id);
+    set_must_die(am_must_die.clone()).await;
 }
 
 /*
@@ -75,7 +83,8 @@ async fn handle_app_input(am_child: Arc<Mutex<Child>>, connector: ConnectorChann
  */
 async fn handle_app_output(am_child: Arc<Mutex<Child>>,
                            connector: ConnectorChannel,
-                           output_type: &str) {
+                           output_type: &str,
+                           am_must_die: Arc<Mutex<bool>>) {
     let mut m_connector = connector;
 
     if let Some(tx) = &mut m_connector.tx {
@@ -85,8 +94,10 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
             let mut data_processed = false;
 
             if output_type == STDOUT {
+                println!("stdout (app_output) getting lock");
                 let mut child_mg = am_child.lock().await;
                 let child = child_mg.deref_mut();
+                println!("app output got lock");
 
                 if let Some(s) = &mut child.stdout {
                     let res = s.read(&mut b).await;
@@ -132,8 +143,8 @@ async fn handle_app_output(am_child: Arc<Mutex<Child>>,
         error!("tx channel non-existent for connector: {}", &m_connector.connector.id.id);
     }
 
-    /* TODO: must abort here */
     error!("Channel ({}) terminated for connector: {}", output_type, &m_connector.connector.id.id);
+    set_must_die(am_must_die.clone()).await;
 }
 
 async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
@@ -141,31 +152,11 @@ async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
     *must_die_mg
 }
 
-async fn check_must_die(am_child: Arc<Mutex<Child>>, am_must_die: Arc<Mutex<bool>>, app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>>{
-    if !__get_must_die(am_must_die).await {
-        return Ok(())
-    }
-    warn!("Caught must die flag. Aborting app: {}", app_id);
-
-    /*
-        TODO:
-            This issues a sigterm, which may not always be advisable. Consider this
-            message from a tokio bugpost:
-            ```
-            Tokio does expose a Child::id method which could be used in conjunction with libc::kill(child.id(), libc::SIGTERM)
-            ```
-     */
-
-    let mut child_mg = am_child.lock().await;
-    let child = child_mg.deref_mut();
-
-    child.kill().await?;
-    warn!("Kill issued for app {}", app_id);
-
-     Ok(())
-}
-
-async fn start_connector_tasks(am_child: Arc<Mutex<Child>>, am_connectors: Arc<Mutex<Vec<ConnectorChannel>>>, app: &App) {
+async fn start_connector_tasks(am_child: Arc<Mutex<Child>>,
+                               am_connectors:
+                               Arc<Mutex<Vec<ConnectorChannel>>>,
+                               app: &App,
+                               am_must_die: Arc<Mutex<bool>>) {
     let mut connectors_mg = am_connectors.lock().await;
     let connectors = connectors_mg.deref_mut();
 
@@ -174,39 +165,56 @@ async fn start_connector_tasks(am_child: Arc<Mutex<Child>>, am_connectors: Arc<M
 
         let integration_type = &connector.connector.integration.integration_type as &str;
         if integration_type == STDIN {
-            tokio::spawn(handle_app_input(am_child.clone(), connector, STDIN));
+            tokio::spawn(handle_app_input(am_child.clone(), connector, STDIN, am_must_die.clone()));
         } else if integration_type == STDOUT {
-            tokio::spawn(handle_app_output(am_child.clone(), connector, STDOUT));
+            tokio::spawn(handle_app_output(am_child.clone(), connector, STDOUT, am_must_die.clone()));
         } else if integration_type == STDERR {
-            tokio::spawn(handle_app_output(am_child.clone(), connector, STDERR));
+            tokio::spawn(handle_app_output(am_child.clone(), connector, STDERR, am_must_die.clone()));
         } else {
             error!("Unable to start connector. Unknown connector type detected: {}", integration_type);
         }
     }
 }
 
-async fn __handle_stdin_passthrough(am_child: Arc<Mutex<Child>>, app_id: String) {
+async fn __write_to_child_stdin(am_child: Arc<Mutex<Child>>, data: &[u8], app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let size = data.len();
+
+    println!("read {} bytes from stdin", size);
+    let mut child_mg = am_child.lock().await;
+    let child = child_mg.deref_mut();
+    println!("got lock");
+
+    if let Some(stdin) = &mut child.stdin {
+        if size == 0 {
+            let msg = "Aborting stdin passthrough due to EOF".to_string();
+            error!("{}", &msg);
+            return Err(Box::new(RadError::from(msg)));
+        }
+
+        println!("writing {} bytes to child's stdin", size);
+        let res = ChildStdin::write_all(stdin, data).await;
+        if let Err(e) = res {
+            error!("error writing to child stdin (passthrough): {}", e);
+            return Err(Box::new(e));
+        }
+        Ok(())
+    } else {
+        let msg = format!("stdin not available for app {}. passthrough not possible", app_id);
+        error!("{}", &msg);
+        Err(Box::new(RadError::from(msg)))
+    }
+}
+
+async fn __handle_stdin_passthrough(am_child: Arc<Mutex<Child>>,
+                                    app_id: String,
+                                    am_must_die: Arc<Mutex<bool>>) {
     let mut b = [0u8; 1024];
 
     loop {
         /* read from stdio, pass to app's stdio */
         let size_res = stdin().read(&mut b);
         if let Ok(size) = size_res {
-            let mut child_mg = am_child.lock().await;
-            let child = child_mg.deref_mut();
-            if let Some(stdin) = &mut child.stdin {
-                if size == 0 {
-                    error!("Aborting stdin passthrough due to EOF");
-                    break;
-                }
-
-                let res = ChildStdin::write_all(stdin, &b[0..size]).await;
-                if let Err(e) = res {
-                    error!("error writing to child stdin (passthrough): {}", e);
-                    break;
-                }
-            } else {
-                error!("stdin not available for app {}. passthrough not possible", app_id);
+            if __write_to_child_stdin(am_child.clone(), &b[0..size], &app_id).await.is_err() {
                 break;
             }
         } else {
@@ -216,9 +224,13 @@ async fn __handle_stdin_passthrough(am_child: Arc<Mutex<Child>>, app_id: String)
     }
 
     error!("stdin passthrough aborting");
+    set_must_die(am_must_die.clone()).await;
 }
 
-async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id: String, out: bool) {
+async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>,
+                                            app_id: String,
+                                            out: bool,
+                                            am_must_die: Arc<Mutex<bool>>) {
     let mut b = [0u8; 1024];
     loop {
         let mut data_processed = false;
@@ -275,6 +287,7 @@ async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id:
                 }
             } else {
                 error!("stderr not available for app {}. passthrough (stderr) not possible", app_id);
+                break;
             }
         }
 
@@ -283,21 +296,24 @@ async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>, app_id:
         }
     }
 
-    /* todo must abort here */
     error!("stdout/stderr passthrough aborted. out={}", out);
+    set_must_die(am_must_die.clone()).await;
 }
 
-async fn start_passthrough_tasks(child: Arc<Mutex<Child>>, stdio: StdioHolder, app: &App) {
+async fn start_passthrough_tasks(child: Arc<Mutex<Child>>,
+                                 stdio: StdioHolder,
+                                 app: &App,
+                                 am_must_die: Arc<Mutex<bool>>) {
     if stdio.input {
-        tokio::spawn(__handle_stdin_passthrough(child.clone(), app.id.id.clone()));
+        tokio::spawn(__handle_stdin_passthrough(child.clone(), app.id.id.clone(), am_must_die.clone()));
     }
 
     if stdio.output {
-        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), true));
+        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), true, am_must_die.clone()));
     }
 
     if stdio.error {
-        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), false));
+        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), false, am_must_die.clone()));
     }
 }
 
@@ -333,40 +349,6 @@ async fn __check_app_exit(am_child: Arc<Mutex<Child>>, app_id: &str) -> Result<O
     }
 
     Ok(None)
-}
-
-async fn check_exit_task(am_child: Arc<Mutex<Child>>, am_must_die: Arc<Mutex<bool>>, app_id: String) {
-    loop {
-        println!("app_id: {}", &app_id);
-
-        let exit_res = __check_app_exit(am_child.clone(), &app_id).await;
-        if let Err(e) = exit_res {
-            error!("Error checking app exit. Aborting. Error: {}", e);
-            break;
-        }
-
-        let exit_opt = exit_res.unwrap();
-        if let Some(s) = exit_opt {
-            let code = if let Some(c) = s.code() {
-                c
-            } else {
-                -1
-            };
-            warn!("app {} exiting. Got status: {}", &app_id, code);
-            set_must_die(am_must_die.clone()).await;
-            break;
-        }
-
-        let must_die_res = check_must_die(am_child.clone(), am_must_die.clone(), &app_id).await;
-        if let Err(e) = must_die_res {
-            error!("Error checking if must die. Error: {}", &e);
-            set_must_die(am_must_die.clone()).await;
-        }
-
-        println!("gh3 {}", &app_id);
-
-        sleep(Duration::from_millis(10)).await;
-    }
 }
 
 fn spawn_process(base_dir: &str,
@@ -416,9 +398,21 @@ pub async fn run_app_main(base_dir: String,
 
     let am_connectors = Arc::new(Mutex::new(connectors));
 
-    start_connector_tasks(am_child.clone(), am_connectors.clone(), &app).await;
-    start_passthrough_tasks(am_child.clone(), stdio, &app).await;
-    tokio::spawn(check_exit_task(am_child.clone(), am_must_die.clone(), app.id.id.to_string()));
+    start_connector_tasks(am_child.clone(), am_connectors.clone(), &app, am_must_die.clone()).await;
+    start_passthrough_tasks(am_child.clone(), stdio, &app, am_must_die.clone()).await;
+
+    loop {
+        if __get_must_die(am_must_die.clone()).await {
+            break;
+        }
+
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    warn!("Killing the child for app: {}", &app.id.id);
+    let mut child_mg = am_child.lock().await;
+    let c = child_mg.deref_mut();
+    c.kill().await?;
 
     Ok(())
 }
