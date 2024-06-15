@@ -6,7 +6,7 @@ use std::time::Duration;
 use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender, unbounded_channel};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
@@ -197,7 +197,7 @@ fn create_channel_io(apps: Arc<Vec<App>>, connections: &[OutIn]) -> Result<HashM
         let in_connector = __find_connector(&in_conn_id, &in_app)?;
 
         /* we can create a channel between in and out */
-        let (tx, rx) = channel(32);
+        let (tx, rx) = channel(1);
 
         /* we read from the output (eg. stdout), and write to the channel */
         let out_connector = ConnectorChannel {
