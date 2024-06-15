@@ -8,6 +8,7 @@ use std::time::Duration;
 use log::{error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::Mutex;
 use tokio::task::yield_now;
 use tokio::time::sleep;
@@ -42,129 +43,102 @@ fn must_grab_stdin_out_err(connector: &[ConnectorChannel]) -> (bool, bool, bool)
 /*
     this handles input TO an application. This means we will WRITE to the application input.
  */
-async fn handle_app_input(am_child: Arc<Mutex<Child>>,
-                          connector: ConnectorChannel,
-                          input_type: &str,
-                          am_must_die: Arc<Mutex<bool>>) {
-    let mut m_connector = connector;
-
+async fn handle_app_input(child: &mut Child,
+                          connector: &mut ConnectorChannel,
+                          input_type: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     /* read from the receiver, write to stdin */
-    if let Some(rx) = &mut m_connector.rx {
-        loop {
-            let data_opt = rx.recv().await;
-            if let Some(data) = data_opt {
-                /* write to stdin */
-                if input_type == STDIN {
-                    /* write to stdin of the app */
-                    println!("handle_app_input getting lock");
-                    let mut child_mg = am_child.lock().await;
-                    let child = child_mg.deref_mut();
-                    println!("handle_app_input got lock");
-                    if let Some(s) = &mut child.stdin {
-                        if s.write_all(&data).await.is_err() {
-                            break;
-                        }
-                    }
-                }
+    return if let Some(rx) = &mut connector.rx {
+        let data_res = rx.try_recv();
+        if let Err(e) = data_res {
+            return if e == TryRecvError::Empty {
+                Ok(())
             } else {
-                error!("rx channel closed for connector: {}", &m_connector.connector.id.id);
-                break;
-            }
-        } //loop
-    } else {
-        error!("rx channel non-existent for connector: {}", &m_connector.connector.id.id);
-    }
+                error!("rx channel closed for connector: {}", &connector.connector.id.id);
+                Err(Box::new(e))
+            };
+        }
 
-    warn!("stdin task shutting down for channel: {}", &m_connector.connector.id.id);
-    set_must_die(am_must_die.clone()).await;
+        let data = data_res.unwrap();
+        /* write to stdin */
+        if input_type == STDIN {
+            /* write to stdin of the app */
+            if let Some(s) = &mut child.stdin {
+                s.write_all(&data).await?;
+            }
+        }
+
+        Ok(())
+    } else {
+        let msg = format!("unexpected error: rx channel non-existent for connector: {}", &connector.connector.id.id);
+        error!("{}", &msg);
+        Err(Box::new(RadError::from(msg)))
+    };
 }
 
 /*
     This handles output FROM the application. This means we will READ from the application output.
  */
-async fn handle_app_output(am_child: Arc<Mutex<Child>>,
-                           connector: ConnectorChannel,
-                           output_type: &str,
-                           am_must_die: Arc<Mutex<bool>>) {
-    let mut m_connector = connector;
-
-    if let Some(tx) = &mut m_connector.tx {
+async fn handle_app_output(child: &mut Child,
+                           connector: &mut ConnectorChannel,
+                           output_type: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+    return if let Some(tx) = &connector.tx {
         let mut b = [0u8; 1024];
 
-        loop {
-            let mut data_processed = false;
-
-            if output_type == STDOUT {
-                let mut child_mg = am_child.lock().await;
-                let child = child_mg.deref_mut();
-
-                //println!("reading from stdout");
-                if let Some(s) = &mut child.stdout {
-                    let res = select! {
+        if output_type == STDOUT {
+            //println!("reading from stdout");
+            if let Some(s) = &mut child.stdout {
+                let res = select! {
                         res = s.read(&mut b) => {
                             res
                         }
                         _ = sleep(Duration::from_micros(100)) => {
                             yield_now().await;
-                            continue;
+                            return Ok(());
                         }
                     };
 
-                    if let Ok(size) = res {
-                        println!("read {} bytes from output", size);
+                if let Ok(size) = res {
+                    println!("read {} bytes from output", size);
 
-                        let send_res = tx.send(b[0..size].to_vec()).await;
-                        if send_res.is_err() {
-                            error!("Error sending data to stdout channel for connector {}", &m_connector.connector.id.id);
-                            break;
-                        }
-
-                        data_processed = true;
-                    } else {
-                        error!("Error reading from stdout for connector {}", &m_connector.connector.id.id);
-                        break;
-                    }
+                    tx.send(b[0..size].to_vec()).await?;
+                } else {
+                    let msg = format!("Error reading from stdout for connector {}", &connector.connector.id.id);
+                    error!("{}", &msg);
+                    return Err(Box::new(RadError::from(msg)));
                 }
             } else {
-                let mut child_mg = am_child.lock().await;
-                let child = child_mg.deref_mut();
+                return Err(Box::new(RadError::from("Unexpected error. stdout not found in child")));
+            }
 
-                if let Some(s) = &mut child.stderr {
-                    let res = select! {
-                        res = s.read(&mut b) => {
-                            res
-                        }
-                        _ = sleep(Duration::from_micros(100)) => {
-                            yield_now().await;
-                            continue;
-                        }
-                    };
-
-                    if let Ok(size) = res {
-                        let send_res = tx.send(b[0..size].to_vec()).await;
-                        if send_res.is_err() {
-                            error!("Error sending data to stderr channel for connector {}", &m_connector.connector.id.id);
-                            break;
-                        }
-
-                        data_processed = true;
-                    } else {
-                        error!("Error reading from stderr for connector {}", &m_connector.connector.id.id);
-                        break;
+            Ok(())
+        } else if let Some(s) = &mut child.stderr {
+            let res = select! {
+                    res = s.read(&mut b) => {
+                        res
                     }
-                }
+                    _ = sleep(Duration::from_micros(100)) => {
+                        yield_now().await;
+                        return Ok(());
+                    }
+                };
+
+            if let Ok(size) = res {
+                tx.send(b[0..size].to_vec()).await?;
+            } else {
+                let msg = format!("Error reading from stderr for connector {}", &connector.connector.id.id);
+                error!("{}", &msg);
+                return Err(Box::new(RadError::from(msg)));
             }
 
-            if !data_processed {
-                sleep(Duration::from_millis(1)).await;
-            }
+            Ok(())
+        } else {
+            Err(Box::new(RadError::from(format!("Unexpected error. stderr not available for connector: {}", &connector.connector.id.id))))
         }
     } else {
-        error!("tx channel non-existent for connector: {}", &m_connector.connector.id.id);
-    }
-
-    error!("Channel ({}) terminated for connector: {}", output_type, &m_connector.connector.id.id);
-    set_must_die(am_must_die.clone()).await;
+        let msg = format!("tx channel non-existent for connector: {}", &connector.connector.id.id);
+        error!("{}", &msg);
+        Err(Box::new(RadError::from(msg)))
+    };
 }
 
 async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
@@ -172,37 +146,29 @@ async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
     *must_die_mg
 }
 
-async fn start_connector_tasks(am_child: Arc<Mutex<Child>>,
-                               am_connectors:
-                               Arc<Mutex<Vec<ConnectorChannel>>>,
-                               app: &App,
-                               am_must_die: Arc<Mutex<bool>>) {
-    let mut connectors_mg = am_connectors.lock().await;
-    let connectors = connectors_mg.deref_mut();
-
-    while !connectors.is_empty() {
-        let connector = connectors.remove(0);
-
+async fn process_connectors(child: &mut Child,
+                            connectors: &mut [ConnectorChannel])
+                            -> Result<(), Box<dyn Error + Sync + Send>> {
+    for connector in connectors {
         let integration_type = &connector.connector.integration.integration_type as &str;
         if integration_type == STDIN {
-            tokio::spawn(handle_app_input(am_child.clone(), connector, STDIN, am_must_die.clone()));
+            handle_app_input(child, connector, STDIN).await?;
         } else if integration_type == STDOUT {
-            tokio::spawn(handle_app_output(am_child.clone(), connector, STDOUT, am_must_die.clone()));
+            handle_app_output(child, connector, STDOUT).await?;
         } else if integration_type == STDERR {
-            tokio::spawn(handle_app_output(am_child.clone(), connector, STDERR, am_must_die.clone()));
+            handle_app_output(child, connector, STDERR).await?;
         } else {
-            error!("Unable to start connector. Unknown connector type detected: {}", integration_type);
+            let msg = format!("Unable to start connector. Unknown connector type detected: {}", integration_type);
+            error!("{}", &msg);
+            return Err(Box::new(RadError::from(msg)));
         }
     }
+
+    Ok(())
 }
 
-async fn __write_to_child_stdin(am_child: Arc<Mutex<Child>>, data: &[u8], app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn __write_to_child_stdin(child: &mut Child, data: &[u8], app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     let size = data.len();
-
-    println!("read {} bytes from stdin", size);
-    let mut child_mg = am_child.lock().await;
-    let child = child_mg.deref_mut();
-    println!("got lock");
 
     if let Some(stdin) = &mut child.stdin {
         if size == 0 {
@@ -225,116 +191,111 @@ async fn __write_to_child_stdin(am_child: Arc<Mutex<Child>>, data: &[u8], app_id
     }
 }
 
-async fn __handle_stdin_passthrough(am_child: Arc<Mutex<Child>>,
-                                    app_id: String,
-                                    am_must_die: Arc<Mutex<bool>>) {
+async fn __handle_stdin_passthrough(child: &mut Child,
+                                    app_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut b = [0u8; 1024];
 
-    loop {
-        /* read from stdio, pass to app's stdio */
-        let size_res = stdin().read(&mut b);
+    /* read from stdio, pass to app's stdio */
+    let size_res = select! {
+            r = async {stdin().read(&mut b)} => {
+                r
+            }
+            _ = sleep(Duration::from_micros(100)) => {
+                return Ok(())
+            }
+        };
+
+    return if let Ok(size) = size_res {
+        __write_to_child_stdin(child, &b[0..size], app_id).await?;
+        Ok(())
+    } else {
+        let msg = "Error reading from stdin";
+        error!("{}", msg);
+        Err(Box::new(RadError::from(msg)))
+    };
+}
+
+async fn __handle_stdout_stderr_passthrough(child: &mut Child,
+                                            app_id: &str,
+                                            out: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut b = [0u8; 1024];
+    /* read from app's stdio, pass to main stdio */
+    return if out {
+        if let Some(stdout) = &mut child.stdout {
+            let size_res = select! {
+                r = AsyncReadExt::read(stdout, &mut b) => {
+                    r
+                }
+                _ = sleep(Duration::from_micros(100)) => {
+                    return Ok(());
+                }
+            };
+            if let Ok(size) = size_res {
+                if size == 0 {
+                    let msg = "Aborting due to EOF read from child stdout (passthrough)";
+                    error!("{}", msg);
+                    return Err(Box::new(RadError::from(msg)));
+                }
+
+                std::io::stdout().write_all(&b[0..size])?;
+                Ok(())
+            } else {
+                let msg = "error reading from child's stdout (passthrough)";
+                error!("{}", msg);
+                Err(Box::new(RadError::from(msg)))
+            }
+        } else {
+            let msg = format!("stdout not available for app {}. passthrough (stdout) not possible", app_id);
+            error!("{}", &msg);
+            Err(Box::new(RadError::from(msg)))
+        }
+    } else if let Some(stderr) = &mut child.stderr {
+        let size_res = select! {
+            r = AsyncReadExt::read(stderr, &mut b) => {
+                r
+            }
+            _ = sleep(Duration::from_micros(100)) => {
+                return Ok(());
+            }
+        };
+
         if let Ok(size) = size_res {
-            if __write_to_child_stdin(am_child.clone(), &b[0..size], &app_id).await.is_err() {
-                break;
+            if size == 0 {
+                let msg = "Aborting due to EOF from child stderr (passthrough)";
+                error!("{}", msg);
+                return Err(Box::new(RadError::from(msg)));
             }
-        } else {
-            error!("Error reading from stdin");
-            break;
-        }
-    }
 
-    error!("stdin passthrough aborting");
-    set_must_die(am_must_die.clone()).await;
+            std::io::stderr().write_all(&b[0..size])?;
+            Ok(())
+        } else {
+            let msg = "Error reading child's stderr (passthrough)";
+            error!("{}", msg);
+            Err(Box::new(RadError::from(msg)))
+        }
+    } else {
+        let msg = format!("stderr not available for app {}. passthrough (stderr) not possible", app_id);
+        error!("{}", msg);
+        Err(Box::new(RadError::from(msg)))
+    }
 }
 
-async fn __handle_stdout_stderr_passthrough(am_child: Arc<Mutex<Child>>,
-                                            app_id: String,
-                                            out: bool,
-                                            am_must_die: Arc<Mutex<bool>>) {
-    let mut b = [0u8; 1024];
-    loop {
-        let mut data_processed = false;
-
-        /* read from app's stdio, pass to main stdio */
-        if out {
-            let mut child_mg = am_child.lock().await;
-            let child = child_mg.deref_mut();
-
-            if let Some(stdout) = &mut child.stdout {
-                let size_res = AsyncReadExt::read(stdout, &mut b).await;
-                if let Ok(size) = size_res {
-                    if size == 0 {
-                        error!("Aborting due to EOF read from child stdout (passthrough)");
-                        break;
-                    }
-
-                    let res = std::io::stdout().write_all(&b[0..size]);
-                    if let Err(e) = res {
-                        error!("Error writing to stdout (passthrough): {}", e);
-                        break;
-                    }
-                    data_processed = true;
-                } else {
-                    error!("error reading from child's stdout (passthrough)");
-                    break;
-                }
-            } else {
-                error!("stdout not available for app {}. passthrough (stdout) not possible", app_id);
-                break;
-            }
-        } else {
-            let mut child_mg = am_child.lock().await;
-            let child = child_mg.deref_mut();
-
-            if let Some(stderr) = &mut child.stderr {
-                let size_res = AsyncReadExt::read(stderr, &mut b).await;
-                if let Ok(size) = size_res {
-                    if size == 0 {
-                        error!("Aborting due to EOF from child stderr (passthrough");
-                        break;
-                    }
-
-                    let res = std::io::stderr().write_all(&b[0..size]);
-                    if let Err(e) = res {
-                        error!("Error writing to stderr (passthrough): {}", e);
-                        break;
-                    }
-
-                    data_processed = true;
-                } else {
-                    error!("Error reading child's stderr (passthrough)");
-                    break;
-                }
-            } else {
-                error!("stderr not available for app {}. passthrough (stderr) not possible", app_id);
-                break;
-            }
-        }
-
-        if !data_processed {
-            sleep(Duration::from_millis(1)).await;
-        }
-    }
-
-    error!("stdout/stderr passthrough aborted. out={}", out);
-    set_must_die(am_must_die.clone()).await;
-}
-
-async fn start_passthrough_tasks(child: Arc<Mutex<Child>>,
-                                 stdio: StdioHolder,
-                                 app: &App,
-                                 am_must_die: Arc<Mutex<bool>>) {
+async fn process_stdio_passthrough(child: &mut Child,
+                                   stdio: &StdioHolder,
+                                   app: &App) -> Result<(), Box<dyn Error + Sync + Send>> {
     if stdio.input {
-        tokio::spawn(__handle_stdin_passthrough(child.clone(), app.id.id.clone(), am_must_die.clone()));
+        __handle_stdin_passthrough(child, &app.id.id).await?;
     }
 
     if stdio.output {
-        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), true, am_must_die.clone()));
+        __handle_stdout_stderr_passthrough(child, &app.id.id, true).await?;
     }
 
     if stdio.error {
-        tokio::spawn(__handle_stdout_stderr_passthrough(child.clone(), app.id.id.clone(), false, am_must_die.clone()));
+        __handle_stdout_stderr_passthrough(child, &app.id.id, false).await?;
     }
+    
+    Ok(())
 }
 
 async fn __check_app_exit(am_child: Arc<Mutex<Child>>, app_id: &str) -> Result<Option<ExitStatus>, Box<dyn Error + Sync + Send>> {
@@ -413,16 +374,19 @@ pub async fn run_app_main(base_dir: String,
                           stdio: StdioHolder,
                           am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
-    let child = spawn_process(&base_dir, &app, &connectors, &stdio)?;
-    let am_child = Arc::new(Mutex::new(child));
+    let mut child = spawn_process(&base_dir, &app, &connectors, &stdio)?;
+    
+    let mut m_connectors = connectors;
 
-    let am_connectors = Arc::new(Mutex::new(connectors));
-
-    start_connector_tasks(am_child.clone(), am_connectors.clone(), &app, am_must_die.clone()).await;
-    start_passthrough_tasks(am_child.clone(), stdio, &app, am_must_die.clone()).await;
 
     loop {
-        if __get_must_die(am_must_die.clone()).await {
+        if process_connectors(&mut child, &mut m_connectors).await.is_err() {
+            set_must_die(am_must_die.clone()).await;
+            break;
+        }
+        
+        if process_stdio_passthrough(&mut child, &stdio, &app).await.is_err() {
+            set_must_die(am_must_die.clone()).await;
             break;
         }
 
@@ -430,9 +394,7 @@ pub async fn run_app_main(base_dir: String,
     }
 
     warn!("Killing the child for app: {}", &app.id.id);
-    let mut child_mg = am_child.lock().await;
-    let c = child_mg.deref_mut();
-    c.kill().await?;
+    child.kill().await?;
 
     Ok(())
 }
