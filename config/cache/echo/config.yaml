@@ -1,9 +1,9 @@
 id:
-  id: input1
+  id: echo
   #name is optional
-  name: reader script
+  name: echo script
   #description is optional
-  description: data received from reader script
+  description: echoes data
 #mandatory. can be one or more inputs. can be one or more outputs
 #for instance, maybe there's stdout, and error out.
 #or maybe there's 2 different types of data being output.
@@ -30,5 +30,5 @@ io:
         type: stdout
         extras: null
 execution:
-  cmd: reader.sh
+  cmd: echo.sh
   args:

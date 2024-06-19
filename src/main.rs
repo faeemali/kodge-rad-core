@@ -6,7 +6,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use log::{info, warn};
 
-use crate::app::{app_exists, get_all_apps};
+use crate::app::{workflow_exists, get_all_workflows};
+use crate::broker::broker::broker_main;
+use crate::config::config::{Config, config_load};
 use crate::error::RadError;
 use crate::workflow::execute_workflow;
 
@@ -16,10 +18,12 @@ mod config;
 mod app;
 mod workflow;
 mod process;
+mod broker;
 
 pub struct AppCtx {
     pub base_dir: String,
     pub must_die: Arc<Mutex<bool>>,
+    pub config: Config,
 }
 
 fn show_help(app_name: &str) {
@@ -31,7 +35,7 @@ fn show_help(app_name: &str) {
 }
 
 fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error>> {
-    let apps = get_all_apps(&app_ctx.base_dir)?;
+    let apps = get_all_workflows(&app_ctx.base_dir)?;
     for app in apps {
         println!("{}", app);
     }
@@ -39,7 +43,7 @@ fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_app(app_ctx: &AppCtx, app: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
-    if !app_exists(&app_ctx.base_dir, app)? {
+    if !workflow_exists(&app_ctx.base_dir, app)? {
         return Err(Box::new(RadError::from("App not found")));
     }
     execute_workflow(app_ctx, app, args).await?;
@@ -92,6 +96,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let base_dir = args[1].as_str();
 
+    let config = config_load(base_dir)?;
+
     log4rs::init_file(format!("{}/log_conf.yaml", base_dir), Default::default())?;
 
     info!("Application Starting");
@@ -102,6 +108,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app_ctx = AppCtx {
         base_dir: base_dir.to_string(),
         must_die: am_must_die.clone(),
+        config: config.clone(),
     };
 
     let am_must_die_clone = am_must_die.clone();

@@ -1,0 +1,21 @@
+id:
+  id: workflow2
+  name: simple echo
+  description: some generic workflow description
+apps:
+  - echo
+connections:
+  #connections can only be output->input, never input->output.
+  #output->input is eg. source to a processor, or
+  #processor->processor, or even processor->output.
+  #but input->output is basically a processor of some sort.
+  #eg. suppose there's a processor that does json->xml.
+  #In that case, the INPUT will be json, and the OUTPUT will
+  #be XML. So the processor (i.e. the code) does the input->output
+  #conversion. For that reason, connections can only be output->input
+  - out: '[]-stdin'
+    in: '[echo]-in1'
+  - out: '[echo]-out1'
+    in: '[]-stdout'
+
+  

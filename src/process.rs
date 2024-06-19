@@ -193,8 +193,7 @@ async fn __write_to_child_stdin(child: &mut Child, data: &[u8], app_id: &str) ->
 
 async fn __handle_stdin_passthrough(child: &mut Child,
                                     app_id: &str,
-                                    stdin_rx: &mut Receiver<Vec<u8>>,
-                                    timeout: Duration) -> Result<(), Box<dyn Error + Sync + Send>> {
+                                    stdin_rx: &mut Receiver<Vec<u8>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     /* read from stdio, pass to app's stdio */
     let data_res = stdin_rx.try_recv();
     if let Err(e) = data_res {
@@ -284,7 +283,7 @@ async fn process_stdio_passthrough(child: &mut Child,
                                    stdin_rx_opt: &mut Option<Receiver<Vec<u8>>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     if stdio.input {
         if let Some(stdin_rx) = stdin_rx_opt {
-            __handle_stdin_passthrough(child, &app.id.id, stdin_rx, Duration::from_micros(10)).await?;
+            __handle_stdin_passthrough(child, &app.id.id, stdin_rx).await?;
         } else {
             return Err(Box::new(RadError::from("Unexpected error: stdin_rx is None!!!")));
         }

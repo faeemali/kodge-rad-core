@@ -12,6 +12,7 @@ use tokio::time::sleep;
 
 use crate::{AppCtx};
 use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
+use crate::broker::broker::{broker_main, BrokerConfig};
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::process::run_app_main;
@@ -96,12 +97,12 @@ impl Workflow {
         if let Some(inputs) = app.io.input {
             for input in &inputs {
                 if input.integration.integration_type == STDIN {
-                    return Err(Box::new(RadError::from(format!("stdin already used by app {}. Cannot assign io", &app.id.id))));
+                    return Ok(());
                 }
             }
         }
 
-        Ok(())
+        Err(Box::new(RadError::from(format!("stdin not specified for this app: {}", &app.id.id))))
     }
 
     fn __verify_stdout_err(&self, wf_ctx: &WorkflowCtx, in_name: &str, out: bool) -> Result<(), Box<dyn Error>> {
@@ -112,15 +113,19 @@ impl Workflow {
             for output in &outputs {
                 if out {
                     if output.integration.integration_type == STDOUT {
-                        return Err(Box::new(RadError::from(format!("stdout already used by app {}. Cannot assign io", &app.id.id))));
+                        return Ok(());
                     }
                 } else if output.integration.integration_type == STDERR {
-                    return Err(Box::new(RadError::from(format!("stderr already used by app {}. Cannot assign io", &app.id.id))));
+                    return Ok(());
                 }
             }
         }
 
-        Ok(())
+        if out {
+            Err(Box::new(RadError::from(format!("stdout not a required output in app {}", &app.id.id))))
+        } else {
+            Err(Box::new(RadError::from(format!("stderr not a required output in app {}", &app.id.id))))
+        }
     }
 
     fn verify_stdio(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
@@ -375,7 +380,7 @@ fn verify_app_and_connector(connectors: &mut [ConnectorHolder],
 
 /* find connections (in/out) and for each app, ensure all connectors are used */
 fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(), Box<dyn Error>> {
-    let mut connectors = get_connectors_for_apps(a_apps.deref());
+    let mut connectors = get_connectors_for_apps(&a_apps);
 
     for outin in &wf_ctx.workflow.connections {
         let (out_app, out_connector) = get_app_and_connector(&outin.output)?;
@@ -384,7 +389,7 @@ fn verify_connections(wf_ctx: &WorkflowCtx, a_apps: Arc<Vec<App>>) -> Result<(),
         let (in_app, in_connector) = get_app_and_connector(&outin.input)?;
         verify_app_and_connector(&mut connectors, &in_app, &in_connector, AppIoDirection::In)?;
     }
-
+    
     /* scan through the list of connectors for any unused items */
     for connector in &connectors {
         if !connector.connected {
@@ -485,7 +490,14 @@ impl ExecutionCtx {
 }
 
 pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
-    let filename = format!("{}/apps/{}/workflow.yaml", app_ctx.base_dir, app_name);
+    tokio::spawn(broker_main(app_ctx.config.broker.clone()));
+
+    loop {
+        sleep(Duration::from_millis(1000)).await;
+    }
+
+
+    let filename = format!("{}/workflows/{}/workflow.yaml", app_ctx.base_dir, app_name);
     let workflow: Workflow = load_yaml(&filename)?;
 
     let mut apps = vec![];
