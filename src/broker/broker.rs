@@ -15,6 +15,7 @@ use crate::broker::broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlMessages, ctrl_main, RegisterMessageReq};
 use crate::broker::control::ControlMessages::RegisterMessage;
 use crate::broker::protocol::{Message, Protocol};
+use crate::broker::router::router_main;
 use crate::error::RadError;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -217,8 +218,11 @@ async fn process_connection(sock: TcpStream, addr: SocketAddr, ctrl_tx: Sender<C
 }
 
 pub async fn broker_main(cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (router_ctrl_tx, router_ctrl_rx) = channel(32);
+    tokio::spawn(router_main(router_ctrl_rx));
+
     let (ctrl_tx, ctrl_rx) = channel(32);
-    tokio::spawn(ctrl_main(ctrl_rx));
+    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone()));
 
     let listener = TcpListener::bind(&cfg.bind_addr).await?;
     loop {
