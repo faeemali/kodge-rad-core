@@ -1,15 +1,16 @@
 use std::error::Error;
 use std::time::Duration;
-use log::{error, warn};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use crate::broker::protocol::States::{GetBody, GetFooter, GetHeader, GetLength, GetMessageType, GetRoutingKeys};
 use crate::error::RadError;
 use base64::prelude::*;
+use crate::utils::crc::crc16_for_byte;
 use crate::utils::timer::Timer;
 
 /**
 Message format is:
-[0xAA]<message type>,[routing key, routing key, routing key/]<length><binary data>[0x55]
+[0xAA]<message type>,[routing key, routing key, routing key/]<length><binary data><crc>[0x55]
 where:
     - message type - required, is a string of no more than 16 chars. [a-zA-Z0-9-_] allowed
     - routing_key is optional. More than one can be specified, and routing keys are comma
@@ -20,6 +21,8 @@ where:
     - length is 3 bytes in LSB, byte0 (first byte after routing key comma) is bits 0-7,
         then 8-15, then 16-23
     - binary data will then be read for <length> bytes
+    - crc is 16 bytes long, calculated with crc16. byte0 is bits 0-7, byte1 is bits-8-15.
+        The crc is calculated for all data from <message_type> to <binary_data>
 
     //TODO: maybe add a checksum
  */
@@ -45,6 +48,8 @@ pub struct Protocol {
     msg_type: String, //msg type retrieved during processing
     routing_keys: Vec<String>, //retrieved during processing
     msg_length: u32, //retrieved during processing
+    retrieved_crc: u32,
+    calculated_crc: u16,
     timer: Timer,
 }
 
@@ -55,6 +60,7 @@ enum States {
     GetRoutingKeys,
     GetLength,
     GetBody,
+    GetCrc,
     GetFooter,
 }
 
@@ -66,6 +72,8 @@ impl Protocol {
             msg_type: "".to_string(),
             routing_keys: vec![],
             msg_length: 0,
+            retrieved_crc: 0x00,
+            calculated_crc: 0xFFFF,
             timer: Timer::new(Duration::from_millis(MSG_RX_TIMEOUT_MS)),
         })
     }
@@ -81,22 +89,15 @@ impl Protocol {
         self.routing_keys = vec![];
         self.msg_length = 0;
         self.timer.reset();
+        self.calculated_crc = 0xFFFF;
     }
 
     fn is_valid_msg_type_char(c: char) -> bool {
-        if c.is_alphanumeric() || c == '-' || c == '_' {
-            true
-        } else {
-            false
-        }
+        c.is_alphanumeric() || c == '-' || c == '_'
     }
 
     fn is_valid_routing_key_char(c: char) -> bool {
-        if Self::is_valid_msg_type_char(c) || c == '.' || c == '*' {
-            true
-        } else {
-            false
-        }
+        Self::is_valid_msg_type_char(c) || c == '.' || c == '*'
     }
 
     fn is_valid_msg_type(&self, msg_type: &str) -> bool {
@@ -164,8 +165,8 @@ impl Protocol {
                 /* msg rx timeout */
                 self.reset();
             }
-            
-            
+
+
             match self.state {
                 GetHeader => {
                     if *b == HEADER {
@@ -205,6 +206,7 @@ impl Protocol {
                         self.state = GetRoutingKeys;
                     } else {
                         self.msg_buffer.push(*b);
+                        self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
                         if self.msg_buffer.len() > MAX_NAME_LENGTH {
                             self.reset();
                             error!("message type too long");
@@ -242,12 +244,14 @@ impl Protocol {
                                 continue;
                             }
                         };
+                        self.routing_keys = keys;
 
                         self.partial_reset();
                         self.msg_length = 0;
                         self.state = GetLength;
                     } else {
                         self.msg_buffer.push(*b);
+                        self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
                         if self.msg_buffer.len() > MAX_RK_LENGTH {
                             error!("rk(s) too long");
                             self.partial_reset();
@@ -261,13 +265,18 @@ impl Protocol {
                     let pos = self.msg_length >> 24;
                     if pos == 0 {
                         self.msg_length = *b as u32; //byte0
+                        self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
+                        
                         self.msg_length |= 1 << 24;
                     } else if pos == 1 {
                         self.msg_length |= (*b as u32) << 8; //byte1
-                        self.msg_length &= 0x00FFFFFF;
-                        self.msg_length |= 2 << 24;
-                    } else if pos == 2 {
+                        self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
+
+                        self.msg_length |= 2 << 24; //value is now 0x03 on the high byte
+                    } else if pos == 3 {
                         self.msg_length |= (*b as u32) << 16;
+                        self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
+
                         self.msg_length &= 0x00FFFFFF; //clear the length byte. we have everything we need
 
                         if self.msg_length == 0 || (self.msg_length as usize) > MAX_MSG_LENGTH {
@@ -287,10 +296,34 @@ impl Protocol {
 
                 GetBody => {
                     self.msg_buffer.push(*b);
+                    self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
+
                     if self.msg_buffer.len() == self.msg_length as usize {
                         self.partial_reset();
                         self.state = GetFooter;
                         continue;
+                    }
+                }
+
+                States::GetCrc=> {
+                    /* use the high byte as a counter */
+                    if (self.retrieved_crc >> 24) == 0 {
+                        //byte0
+                        self.retrieved_crc = *b as u32;
+                        self.retrieved_crc |= 1 << 24;
+                    } else {
+                        //byte1
+                        self.retrieved_crc |= (*b as u32) << 8;
+                        self.retrieved_crc &= 0x00FFFFFF;
+                        
+                        if self.retrieved_crc != self.calculated_crc as u32 {
+                            debug!("Ignoring message: invalid crc");
+                            self.reset();
+                            continue;
+                        }
+                        
+                        self.partial_reset();
+                        self.state = GetFooter;
                     }
                 }
 
