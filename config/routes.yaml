@@ -1,0 +1,5 @@
+routes:
+  - src:
+      app: test1
+    dst: test1
+  

@@ -2,13 +2,12 @@ use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::time::Duration;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, Interest};
+use tokio::io::{Interest};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::time::sleep;
 use crate::broker::auth::{authenticate, AuthMessage, MSG_TYPE_AUTH};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
@@ -69,7 +68,7 @@ async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -
     }
 
     let auth_msg_wrapper = &msgs[0];
-    if auth_msg_wrapper.msg_type != MSG_TYPE_AUTH || !auth_msg_wrapper.routing_keys.is_empty() {
+    if auth_msg_wrapper.header.msg_type != MSG_TYPE_AUTH {
         return Err(Box::new(RadError::from("Invalid message for authentication")));
     }
 
@@ -176,21 +175,20 @@ async fn process_connection(sock: TcpStream,
     };
 
 
-    let mut m_sock = sock;
     let mut must_read = false;
     loop {
         must_read = !must_read;
 
         let ready = if !must_read {
             /* XXX Note: the example says to use a bitwise | here, but that never works!!!. if READABLE | WRITABLE is used, only writable is ever set */
-            m_sock.ready(Interest::WRITABLE).await?
+            sock.ready(Interest::WRITABLE).await?
         } else {
-            m_sock.ready(Interest::READABLE).await?
+            sock.ready(Interest::READABLE).await?
         };
 
         if ready.is_readable() {
             let mut data = [0u8; 1024];
-            match m_sock.try_read(&mut data) {
+            match sock.try_read(&mut data) {
                 Ok(n) => {
                     if n == 0 {
                         break;
@@ -226,12 +224,17 @@ async fn process_connection(sock: TcpStream,
                 loop {
                     match rx.try_recv() {
                         Ok(msg) => {
-                            let encoded_msg = Protocol::format(&msg);
+                            let encoded_msg_res = Protocol::format(&msg);
+                            if let Err(e) = encoded_msg_res {
+                                debug!("Error encoding message: {}. Ignoring.", &e);
+                                continue;
+                            }
+                            let encoded_msg = encoded_msg_res.unwrap();
                             let encoded_slice = encoded_msg.as_slice();
 
                             let mut pos = 0usize;
                             loop {
-                                let res = m_sock.try_write(&encoded_slice[pos..]);
+                                let res = sock.try_write(&encoded_slice[pos..]);
                                 match res {
                                     Ok(n) => {
                                         pos = n;
@@ -250,7 +253,7 @@ async fn process_connection(sock: TcpStream,
                                 }
                             }
                         }
-                        
+
                         Err(TryRecvError::Empty) => {
                             continue;
                         }
@@ -268,11 +271,11 @@ async fn process_connection(sock: TcpStream,
     Ok(())
 }
 
-pub async fn broker_main(cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn broker_main(base_dir: String, cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
-    tokio::spawn(router_main(router_ctrl_rx, router_conn_rx));
+    tokio::spawn(router_main(base_dir.clone(), router_ctrl_rx, router_conn_rx));
 
     let (ctrl_tx, ctrl_rx) = channel(32);
     tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone()));

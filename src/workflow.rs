@@ -490,7 +490,7 @@ impl ExecutionCtx {
 }
 
 pub async fn execute_workflow(app_ctx: &AppCtx, app_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
-    tokio::spawn(broker_main(app_ctx.config.broker.clone()));
+    tokio::spawn(broker_main(app_ctx.base_dir.clone(), app_ctx.config.broker.clone()));
 
     loop {
         sleep(Duration::from_millis(1000)).await;
