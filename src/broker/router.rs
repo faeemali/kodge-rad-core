@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::process::exit;
-use log::error;
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -35,14 +35,38 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
     }
 }
 
+async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
+    let key = format!("{}/*", &msg.header.name);
+    let val_opt = ctx.routes_map.get(&key);
+    if let Some(val) = val_opt {
+        return Some(val);
+    }
+
+    let key = format!("{}/{}", &msg.header.name, &msg.header.msg_type);
+    let val_opt = ctx.routes_map.get(&key);
+    if let Some(val) = val_opt {
+        return Some(val);
+    }
+
+    None
+}
+
 ///processes messages received from the various network connections
-async fn process_connection_message(msg: Message) {
-    
+async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
+    match __get_route_dst(ctx, &msg).await {
+        Some(r) => {
+            /* send message to all dsts */
+        }
+        None => {
+            debug!("Ignoring route for: {}/{}. Not found", &msg.header.name, &msg.header.msg_type);
+        }
+    }
 }
 
 struct RouterCtx {
     pub connections: HashMap<String, RegisterConnectionReq>,
-    pub routes: Routes,
+    pub route_config: RouteConfig,
+    pub routes_map: HashMap<String, Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -52,19 +76,43 @@ struct RouteSrc {
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
-struct Routes {
+struct Route {
     pub src: RouteSrc,
-    pub dst: String,
+    pub dst: Vec<String>,
 }
 
-async fn read_config(base_dir: String) -> Result<Routes, Box<dyn Error>> {
+#[derive(Serialize, Deserialize, Eq, PartialEq)]
+struct RouteConfig {
+    pub routes: Vec<Route>,
+}
+
+async fn read_config(base_dir: String) -> Result<RouteConfig, Box<dyn Error>> {
     let path = format!("{}/routes.yaml", &base_dir);
     let mut f = File::open(&path).await?;
-    
+
     let mut contents = String::new();
     f.read_to_string(&mut contents).await?;
-    let routes: Routes = serde_yaml::from_str(&contents)?;
+    let routes: RouteConfig = serde_yaml::from_str(&contents)?;
     Ok(routes)
+}
+
+///Convert routes into key=="name/message_type" and val==dst
+async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<String>> {
+    let mut routes_map = HashMap::new();
+    for route in &route_config.routes {
+        if let Some(types) = &route.src.types {
+            for t in types {
+                let route_key = format!("{}/{}", route.src.app, t);
+                routes_map.insert(route_key, route.dst.clone());
+            }
+        } else {
+            /* applicable for all types */
+            let route_key = format!("{}/*", route.src.app);
+            routes_map.insert(route_key, route.dst.clone());
+        }
+    }
+
+    routes_map
 }
 
 pub async fn router_main(base_dir: String,
@@ -75,11 +123,13 @@ pub async fn router_main(base_dir: String,
         error!("Error loading routes: {}", &e);
         exit(1);
     }
-    let routes = routes_res.unwrap();
+    let route_config = routes_res.unwrap();
+    let routes_map = preprocess_routes(&route_config).await;
 
     let mut ctx = RouterCtx {
         connections: HashMap::new(),
-        routes,
+        route_config,
+        routes_map,
     };
 
     let mut m_ctrl_rx = ctrl_rx; //for control messages
@@ -101,7 +151,7 @@ pub async fn router_main(base_dir: String,
         //process messages from connections
         match m_conn_rx.try_recv() {
             Ok(msg) => {
-                process_connection_message(msg).await;
+                process_connection_message(&ctx, msg).await;
             }
 
             Err(e) => {
