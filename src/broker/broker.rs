@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, Interest};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -36,7 +36,7 @@ enum Actions {
     NoAction,
 }
 
-async fn process_control_messages(conn_ctx: &mut ConnectionCtx) -> Result<Actions, Box<dyn Error + Sync + Send>> {
+async fn __get_control_message(conn_ctx: &mut ConnectionCtx) -> Result<Actions, Box<dyn Error + Sync + Send>> {
     if let Some(ctrl_rx) = &mut conn_ctx.ctrl_rx {
         match ctrl_rx.try_recv() {
             Ok(msg) => {
@@ -63,85 +63,89 @@ async fn process_control_messages(conn_ctx: &mut ConnectionCtx) -> Result<Action
     }
 }
 
-async fn process_messages(conn_ctx: &mut ConnectionCtx,
-                          msgs: &[Message])
-                          -> Result<bool, Box<dyn Error + Sync + Send>> {
-    let mut register_details_opt = None;
-    loop {
-        match conn_ctx.state {
-            Authenticate => {
-                if msgs.len() != 1 {
-                    return Err(Box::new(RadError::from("Invalid number of messages for authentication")));
-                }
+async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if msgs.len() != 1 {
+        return Err(Box::new(RadError::from("Invalid number of messages for authentication")));
+    }
 
-                let auth_msg_wrapper = &msgs[0];
-                if auth_msg_wrapper.msg_type != MSG_TYPE_AUTH || !auth_msg_wrapper.routing_keys.is_empty() {
-                    return Err(Box::new(RadError::from("Invalid message for authentication")));
-                }
+    let auth_msg_wrapper = &msgs[0];
+    if auth_msg_wrapper.msg_type != MSG_TYPE_AUTH || !auth_msg_wrapper.routing_keys.is_empty() {
+        return Err(Box::new(RadError::from("Invalid message for authentication")));
+    }
 
-                let auth_msg = serde_json::from_slice::<AuthMessage>(auth_msg_wrapper.body.as_slice())?;
+    let auth_msg = serde_json::from_slice::<AuthMessage>(auth_msg_wrapper.body.as_slice())?;
 
-                if authenticate(&auth_msg).await? {
-                    register_details_opt = Some(auth_msg);
-                    conn_ctx.state = Register;
-                    continue;
-                } else {
-                    return Err(Box::new(RadError::from("Authentication error")));
-                }
-            }
-
-            Register => {
-                //must register with the control system
-                match &register_details_opt {
-                    Some(r) => {
-                        /* create a means for the control plane to communicate back */
-                        let (conn_tx, ctrl_rx) = channel(32);
-
-                        /* create a means for the router to send back messages */
-                        let (conn_router_tx, router_rx) = channel(32);
-
-                        let reg = RegisterMessageReq {
-                            data: ControlConnData {
-                                conn_ctrl_tx: conn_tx, //for control plane to send messages to connection
-                                name: r.name.clone(),
-                                rx_msg_types: r.rx_msg_types.clone(),
-                                tx_msg_types: r.tx_msg_types.clone(),
-                            },
-                            conn_router_tx, //for router to send messages to connection
-                        };
-                        register_details_opt = None;
-                        conn_ctx.ctrl_rx = Some(ctrl_rx);
-                        conn_ctx.router_rx = Some(router_rx);
-
-                        conn_ctx.ctrl_tx.send(RegisterMessage(reg)).await?;
-                        conn_ctx.state = Process;
-                    }
-                    None => {
-                        return Err(Box::new(RadError::from("Failed to get register details (unexpected)")));
-                    }
-                }
-            }
-
-            Process => {
-                /* check for messages from the control plane */
-                let action = process_control_messages(conn_ctx).await?;
-                if action == MustDisconnect {
-                    let name = match &conn_ctx.name {
-                        Some(n) => { n }
-                        None => "[unknown]",
-                    };
-                    info!("Received disconnect message for {}. Disconnecting.", name);
-                    return Ok(false);
-                }
-            }
-        }
-
-        //TODO: do this only when there's no activity
-        sleep(Duration::from_millis(1)).await;
+    if authenticate(&auth_msg).await? {
+        conn_ctx.auth_message = Some(auth_msg);
+        Ok(())
+    } else {
+        Err(Box::new(RadError::from("Authentication error")))
     }
 }
 
+async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
+    //must register with the control system
+    if let Some(r) = &conn_ctx.auth_message {
+        /* create a means for the control plane to communicate back */
+        let (conn_tx, ctrl_rx) = channel(32);
+
+        /* create a means for the router to send back messages */
+        let (conn_router_tx, router_rx) = channel(32);
+
+        let reg = RegisterMessageReq {
+            data: ControlConnData {
+                conn_ctrl_tx: conn_tx, //for control plane to send messages to connection
+                name: r.name.clone(),
+                rx_msg_types: r.rx_msg_types.clone(),
+                tx_msg_types: r.tx_msg_types.clone(),
+            },
+            conn_router_tx, //for router to send messages to connection
+        };
+
+        conn_ctx.ctrl_rx = Some(ctrl_rx);
+        conn_ctx.router_rx = Some(router_rx);
+
+        conn_ctx.ctrl_tx.send(RegisterMessage(reg)).await?;
+        conn_ctx.state = Process;
+
+        Ok(())
+    } else {
+        Err(Box::new(RadError::from("Failed to get register details (unexpected)")))
+    }
+}
+
+async fn process_messages(conn_ctx: &mut ConnectionCtx,
+                          msgs: Vec<Message>)
+                          -> Result<bool, Box<dyn Error + Sync + Send>> {
+    if conn_ctx.state == Authenticate {
+        __authenticate_client(conn_ctx, &msgs).await?;
+    }
+
+    if conn_ctx.state == Register {
+        __register_client(conn_ctx).await?;
+    }
+
+    /* check for messages from the control plane */
+    let action = __get_control_message(conn_ctx).await?;
+    if action == MustDisconnect {
+        let name = match &conn_ctx.name {
+            Some(n) => { n }
+            None => "[unknown]",
+        };
+        info!("Received disconnect message for {}. Disconnecting.", name);
+        return Ok(false);
+    }
+
+    /* pass all messages to the router */
+    for msg in msgs {
+        conn_ctx.router_tx.send(msg).await?;
+    }
+
+    Ok(true)
+}
+
 struct ConnectionCtx {
+    pub auth_message: Option<AuthMessage>,
     pub state: States,
     pub name: Option<String>,
     pub protocol: Protocol,
@@ -161,6 +165,7 @@ async fn process_connection(sock: TcpStream,
     let protocol = Protocol::new()?;
 
     let mut conn_ctx = ConnectionCtx {
+        auth_message: None,
         state: Authenticate,
         name: None,
         protocol,
@@ -170,26 +175,28 @@ async fn process_connection(sock: TcpStream,
         router_rx: None,
     };
 
+
+    let mut m_sock = sock;
     let mut must_read = false;
     loop {
         must_read = !must_read;
 
         let ready = if !must_read {
             /* XXX Note: the example says to use a bitwise | here, but that never works!!!. if READABLE | WRITABLE is used, only writable is ever set */
-            sock.ready(Interest::WRITABLE).await?
+            m_sock.ready(Interest::WRITABLE).await?
         } else {
-            sock.ready(Interest::READABLE).await?
+            m_sock.ready(Interest::READABLE).await?
         };
 
         if ready.is_readable() {
             let mut data = [0u8; 1024];
-            match sock.try_read(&mut data) {
+            match m_sock.try_read(&mut data) {
                 Ok(n) => {
                     if n == 0 {
                         break;
                     }
-                    let msgs = &conn_ctx.protocol.feed(&data);
-                    let process_res = process_messages(&mut conn_ctx, &msgs).await;
+                    let msgs = conn_ctx.protocol.feed(&data);
+                    let process_res = process_messages(&mut conn_ctx, msgs).await;
                     match process_res {
                         Ok(must_continue) => {
                             if !must_continue {
@@ -214,16 +221,45 @@ async fn process_connection(sock: TcpStream,
         }
 
         if ready.is_writable() && !must_read {
-            match sock.try_write(b"hello world\n") {
-                Ok(n) => {
-                    //println!("wrote {} bytes", n);
-                }
-                Err(ref e) if e.kind() == WouldBlock => {
-                    continue;
-                }
-                Err(e) => {
-                    break;
-                }
+            /* must read messages from the router and forward to the app */
+            if let Some(rx) = &mut conn_ctx.router_rx {
+                loop {
+                    match rx.try_recv() {
+                        Ok(msg) => {
+                            let encoded_msg = Protocol::format(&msg);
+                            let encoded_slice = encoded_msg.as_slice();
+
+                            let mut pos = 0usize;
+                            loop {
+                                let res = m_sock.try_write(&encoded_slice[pos..]);
+                                match res {
+                                    Ok(n) => {
+                                        pos = n;
+                                        if pos == encoded_slice.len() {
+                                            break; //break out of the write loop
+                                        }
+                                    }
+                                    Err(ref e) if e.kind() == WouldBlock => {
+                                        continue;
+                                    }
+
+                                    Err(e) => {
+                                        error!("Write error detected. Aborting. Error: {}", &e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Err(TryRecvError::Empty) => {
+                            continue;
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            error!("Router channel closed. Aborting");
+                            break;
+                        }
+                    }
+                } //loop
             }
         }
     }

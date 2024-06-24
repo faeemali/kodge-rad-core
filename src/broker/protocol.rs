@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::broker::protocol::States::{GetBody, GetFooter, GetHeader, GetLength, GetMessageType, GetRoutingKeys};
 use crate::error::RadError;
 use base64::prelude::*;
-use crate::utils::crc::crc16_for_byte;
+use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
 
 /**
@@ -266,7 +266,7 @@ impl Protocol {
                     if pos == 0 {
                         self.msg_length = *b as u32; //byte0
                         self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
-                        
+
                         self.msg_length |= 1 << 24;
                     } else if pos == 1 {
                         self.msg_length |= (*b as u32) << 8; //byte1
@@ -315,13 +315,13 @@ impl Protocol {
                         //byte1
                         self.retrieved_crc |= (*b as u32) << 8;
                         self.retrieved_crc &= 0x00FFFFFF;
-                        
+
                         if self.retrieved_crc != self.calculated_crc as u32 {
                             debug!("Ignoring message: invalid crc");
                             self.reset();
                             continue;
                         }
-                        
+
                         self.partial_reset();
                         self.state = GetFooter;
                     }
@@ -345,6 +345,55 @@ impl Protocol {
             }
         }
 
+        ret
+    }
+
+    pub fn format(msg: &Message) -> Vec<u8> {
+        let mut crc = 0xFFFFu16;
+
+        let mut ret = vec![];
+        ret.push(HEADER);
+
+        let msg_type_slice = msg.msg_type.as_bytes();
+        ret.extend_from_slice(msg_type_slice);
+        crc = crc16(crc, msg_type_slice, msg_type_slice.len());
+
+        ret.extend_from_slice(",".as_bytes());
+        crc = crc16_for_byte(crc, ',' as u8);
+
+        for rk in &msg.routing_keys {
+            let rk_slice = rk.as_bytes();
+            ret.extend_from_slice(rk_slice);
+            crc = crc16(crc, rk_slice, rk_slice.len());
+
+            ret.extend_from_slice(",".as_bytes());
+            crc = crc16_for_byte(crc, ',' as u8);
+        }
+
+        ret.extend_from_slice("/".as_bytes());
+        crc = crc16_for_byte(crc, '/' as u8);
+
+        let len = msg.body.len();
+        let mut lb = (len & 0xFF) as u8;
+        ret.push(lb);
+        crc = crc16_for_byte(crc, lb);
+
+        lb = ((len >> 8) & 0xFF) as u8;
+        ret.push(lb);
+        crc = crc16_for_byte(crc, lb);
+
+        lb = ((len >> 16) & 0xFF) as u8;
+        ret.push(lb);
+        crc = crc16_for_byte(crc, lb);
+
+        let body_slice = msg.body.as_slice();
+        ret.extend_from_slice(body_slice);
+        crc = crc16(crc, body_slice, body_slice.len());
+
+        ret.push((crc & 0xFF) as u8);
+        ret.push(((crc >> 8) & 0xFF) as u8);
+
+        ret.push(FOOTER);
         ret
     }
 }

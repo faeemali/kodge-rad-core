@@ -23,12 +23,7 @@ const CRC16_TAB: [u16; 256] = [0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0
 pub fn crc16(curr_crc: u16, buf: &[u8], len: usize) -> u16 {
     let mut crc: u16 = curr_crc;
     for counter in 0..len {
-        let shifted_l8 = crc << 8;
-        let shifted_r8 = crc >> 8;
-        let item = buf[counter];
-        let table_pos = ((shifted_r8 ^ (item as u16)) & 0x00FF) as usize;
-        let table_item = CRC16_TAB[table_pos];
-        crc = shifted_l8 ^ table_item;
+        crc = crc16_for_byte(curr_crc, buf[counter]);
     }
     crc
 }

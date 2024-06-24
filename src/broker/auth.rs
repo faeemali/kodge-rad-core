@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MSG_TYPE_AUTH: &str = "rad-auth";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq)]
 pub struct AuthMessage {
     //the types of messages this service can receive
     pub rx_msg_types: Vec<String>,
