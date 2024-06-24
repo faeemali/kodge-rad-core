@@ -3,14 +3,13 @@ use std::error::Error;
 use log::{error, info, warn};
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::broker::control::ControlMessages::{DisconnectMessage};
-use crate::broker::router::{AddRoutesReq, RouterControlMessages};
+use crate::broker::protocol::Message;
+use crate::broker::router::{RegisterConnectionReq, RouterControlMessages};
 use crate::broker::router::RouterControlMessages::RemoveRoutes;
 
 pub struct RegisterMessageReq {
-    pub name: String,
-    pub rx_msg_types: Vec<String>,
-    pub tx_msg_types: Vec<String>,
-    pub conn_tx: Sender<ControlMessages>,
+    pub data: ControlConnData,
+    pub conn_router_tx: Sender<Message>, //for connection to send messages to router
 }
 
 pub enum ControlMessages {
@@ -18,8 +17,16 @@ pub enum ControlMessages {
     DisconnectMessage(String),
 }
 
+/* data shared between the control plane and the connection */
+pub struct ControlConnData {
+    pub name: String,
+    pub rx_msg_types: Vec<String>,
+    pub tx_msg_types: Vec<String>,
+    pub conn_ctrl_tx: Sender<ControlMessages>,
+}
+
 struct CtrlCtx {
-    connections: HashMap<String, RegisterMessageReq>,
+    connections: HashMap<String, ControlConnData>,
     router_ctrl_tx: Sender<RouterControlMessages>,
 }
 
@@ -32,7 +39,7 @@ async fn disconnect(ctx: &mut CtrlCtx, name: &str) -> Result<(), Box<dyn Error +
     match ctx.connections.get(name) {
         Some(conn) => {
             info!("Disconnecting connection: {}", name);
-            conn.conn_tx.send(DisconnectMessage(name.to_string())).await?;
+            conn.conn_ctrl_tx.send(DisconnectMessage(name.to_string())).await?;
             remove_routes(ctx, name).await?;
         }
         None => {
@@ -45,30 +52,33 @@ async fn disconnect(ctx: &mut CtrlCtx, name: &str) -> Result<(), Box<dyn Error +
     Ok(())
 }
 
-async fn register_connection(ctx: &mut CtrlCtx, new_conn: RegisterMessageReq) -> Result<(), Box<dyn Error + Sync + Send>>{
-    let key = new_conn.name.trim();
+async fn register_connection(ctx: &mut CtrlCtx,
+                             new_conn: RegisterMessageReq)
+                             -> Result<(), Box<dyn Error + Sync + Send>> {
+    let key = new_conn.data.name.trim();
     if ctx.connections.contains_key(key) {
         /* send disconnect messages */
         disconnect(ctx, key).await?;
     }
 
-    let name = new_conn.name.to_string();
-    ctx.connections.insert(name.clone(), new_conn);
+    let name = new_conn.data.name.to_string();
+    ctx.connections.insert(name.clone(), new_conn.data);
     info!("Registered connection: {}", name);
-    
-    ctx.router_ctrl_tx.send(RouterControlMessages::AddRoutes(AddRoutesReq {
-        /* TODO ??? */    
+
+    ctx.router_ctrl_tx.send(RouterControlMessages::RegisterConnection(RegisterConnectionReq {
+        name,
+        conn_tx: new_conn.conn_router_tx,
     })).await?;
-    
+
     Ok(())
 }
 
 pub async fn ctrl_main(rx: Receiver<ControlMessages>,
-                        router_ctrl_tx: Sender<RouterControlMessages>) {
+                       router_ctrl_tx: Sender<RouterControlMessages>) {
     info!("Broker command receiver running");
 
     let mut ctx = CtrlCtx {
-      connections: HashMap::new(),
+        connections: HashMap::new(),
         router_ctrl_tx,
     };
 
@@ -97,7 +107,6 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
                 break;
             }
         }
-
     }
 
     warn!("Broker receiver closed. Aborting");

@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use crate::broker::auth::{authenticate, AuthMessage, MSG_TYPE_AUTH};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
-use crate::broker::control::{ControlMessages, ctrl_main, RegisterMessageReq};
+use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
 use crate::broker::control::ControlMessages::RegisterMessage;
 use crate::broker::protocol::{Message, Protocol};
 use crate::broker::router::router_main;
@@ -59,14 +59,13 @@ async fn process_control_messages(conn_ctx: &mut ConnectionCtx) -> Result<Action
 
         Ok(NoAction)
     } else {
-        Err(Box::new(RadError::from("Unexpected error. ctrl_rx is None")))        
+        Err(Box::new(RadError::from("Unexpected error. ctrl_rx is None")))
     }
 }
 
 async fn process_messages(conn_ctx: &mut ConnectionCtx,
                           msgs: &[Message])
                           -> Result<bool, Box<dyn Error + Sync + Send>> {
-
     let mut register_details_opt = None;
     loop {
         match conn_ctx.state {
@@ -97,14 +96,22 @@ async fn process_messages(conn_ctx: &mut ConnectionCtx,
                     Some(r) => {
                         /* create a means for the control plane to communicate back */
                         let (conn_tx, ctrl_rx) = channel(32);
+
+                        /* create a means for the router to send back messages */
+                        let (conn_router_tx, router_rx) = channel(32);
+
                         let reg = RegisterMessageReq {
-                            conn_tx,
-                            name: r.name.clone(),
-                            rx_msg_types: r.rx_msg_types.clone(),
-                            tx_msg_types: r.tx_msg_types.clone(),
+                            data: ControlConnData {
+                                conn_ctrl_tx: conn_tx, //for control plane to send messages to connection
+                                name: r.name.clone(),
+                                rx_msg_types: r.rx_msg_types.clone(),
+                                tx_msg_types: r.tx_msg_types.clone(),
+                            },
+                            conn_router_tx, //for router to send messages to connection
                         };
                         register_details_opt = None;
                         conn_ctx.ctrl_rx = Some(ctrl_rx);
+                        conn_ctx.router_rx = Some(router_rx);
 
                         conn_ctx.ctrl_tx.send(RegisterMessage(reg)).await?;
                         conn_ctx.state = Process;
@@ -120,7 +127,7 @@ async fn process_messages(conn_ctx: &mut ConnectionCtx,
                 let action = process_control_messages(conn_ctx).await?;
                 if action == MustDisconnect {
                     let name = match &conn_ctx.name {
-                        Some(n) => {n},
+                        Some(n) => { n }
                         None => "[unknown]",
                     };
                     info!("Received disconnect message for {}. Disconnecting.", name);
@@ -138,11 +145,17 @@ struct ConnectionCtx {
     pub state: States,
     pub name: Option<String>,
     pub protocol: Protocol,
-    pub ctrl_tx: Sender<ControlMessages>, //send messages from control plane
+    pub ctrl_tx: Sender<ControlMessages>, //send messages to the control plane
     pub ctrl_rx: Option<Receiver<ControlMessages>>, //receive messages from the control plane
+    pub router_tx: Sender<Message>, //send messages to router
+    pub router_rx: Option<Receiver<Message>>, //for the router to send messages to the connection
 }
 
-async fn process_connection(sock: TcpStream, addr: SocketAddr, ctrl_tx: Sender<ControlMessages>) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn process_connection(sock: TcpStream,
+                            addr: SocketAddr,
+                            ctrl_tx: Sender<ControlMessages>,
+                            router_tx: Sender<Message>)
+                            -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("broker accepted connection from: {}", addr);
 
     let protocol = Protocol::new()?;
@@ -153,6 +166,8 @@ async fn process_connection(sock: TcpStream, addr: SocketAddr, ctrl_tx: Sender<C
         protocol,
         ctrl_tx,
         ctrl_rx: None,
+        router_tx,
+        router_rx: None,
     };
 
     let mut must_read = false;
@@ -213,13 +228,15 @@ async fn process_connection(sock: TcpStream, addr: SocketAddr, ctrl_tx: Sender<C
         }
     }
 
-    println!("Socket closing for",);
+    println!("Socket closing for", );
     Ok(())
 }
 
 pub async fn broker_main(cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
-    tokio::spawn(router_main(router_ctrl_rx));
+    let (router_conn_tx, router_conn_rx) = channel(32);
+
+    tokio::spawn(router_main(router_ctrl_rx, router_conn_rx));
 
     let (ctrl_tx, ctrl_rx) = channel(32);
     tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone()));
@@ -227,6 +244,8 @@ pub async fn broker_main(cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync +
     let listener = TcpListener::bind(&cfg.bind_addr).await?;
     loop {
         let (sock, addr) = listener.accept().await?;
-        tokio::spawn(process_connection(sock, addr, ctrl_tx.clone()));
+        tokio::spawn(process_connection(sock, addr,
+                                        ctrl_tx.clone(), //for sending messages to the control plane
+                                        router_conn_tx.clone())); //for sending messages to the router
     }
 }
