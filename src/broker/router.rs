@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::process::exit;
-use log::{debug, error};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -51,11 +51,24 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     None
 }
 
+fn find_connection_by_name<'a>(ctx: &'a RouterCtx, name: &str) -> Option<&'a RegisterConnectionReq> {
+    ctx.connections.get(name)
+}
+
 ///processes messages received from the various network connections
 async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
     match __get_route_dst(ctx, &msg).await {
-        Some(r) => {
+        Some(dsts) => {
             /* send message to all dsts */
+            for dst in dsts {
+                if let Some(c) = find_connection_by_name(ctx, dst) {
+                    if let Err(e) = c.conn_tx.send(msg.clone()).await {
+                        warn!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
+                    }
+                } else {
+                    debug!("dst {} does not exist. Unable to forward message", dst);
+                }             
+            }
         }
         None => {
             debug!("Ignoring route for: {}/{}. Not found", &msg.header.name, &msg.header.msg_type);
