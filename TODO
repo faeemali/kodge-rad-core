@@ -1,6 +1,4 @@
-- add support for TCP/IP integration (client only?, server only?, both?)
 - add apps
-- build extra connectors eg. one->many splits
 - maybe add a runtime file for later termination of apps
 - build a ui
 - build server framework to download apps from the web (plugin framework)

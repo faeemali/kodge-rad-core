@@ -30,8 +30,9 @@ impl Workflow {
         }
         Ok(())
     }
-    
+
     fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
+        info!("verifying workflow: {}", &self.id.id);
         self.id.print();
 
         info!("verifying apps");
@@ -107,8 +108,6 @@ pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[Str
     };
 
     wf_ctx.workflow.verify(&wf_ctx)?;
-    info!("All app connections verified");
-
     let mut exec_ctx = ExecutionCtx {
         base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
