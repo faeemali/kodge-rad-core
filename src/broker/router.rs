@@ -34,6 +34,8 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
     }
 }
 
+///gets the destination for a message. This searches the routes_map in ctx and looks for
+/// a route with a specific name, or a route marked as "*" which means accept all messages
 async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
     let key = format!("{}/*", &msg.header.name);
     let val_opt = ctx.routes_map.get(&key);
