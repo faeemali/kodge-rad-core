@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::time::Duration;
-use log::{debug, error};
+use log::{debug};
 use serde::{Deserialize, Serialize};
 use crate::broker::protocol::States::{GetBody, GetFooter, GetHeader, GetMessageHeader};
 use crate::error::RadError;

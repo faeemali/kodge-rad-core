@@ -3,9 +3,7 @@ use std::fs::{File, read_dir};
 use std::path::Path;
 use base64::DecodeError;
 use base64::prelude::*;
-
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
    match opt {
@@ -42,6 +40,7 @@ pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error
     Ok(yaml)
 }
 
+#[allow(dead_code)]
 pub fn decode_base64_byte_stream(encoded_data: &str) -> Result<Vec<u8>, DecodeError> {
     BASE64_STANDARD.decode(encoded_data)
 }

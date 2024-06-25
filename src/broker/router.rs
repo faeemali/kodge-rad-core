@@ -67,7 +67,7 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
                     }
                 } else {
                     debug!("dst {} does not exist. Unable to forward message", dst);
-                }             
+                }
             }
         }
         None => {
@@ -99,8 +99,8 @@ struct RouteConfig {
     pub routes: Vec<Route>,
 }
 
-async fn read_config(base_dir: String) -> Result<RouteConfig, Box<dyn Error>> {
-    let path = format!("{}/routes.yaml", &base_dir);
+async fn read_config(base_dir: String, workflow: &str) -> Result<RouteConfig, Box<dyn Error>> {
+    let path = format!("{}/workflows/{}/routes.yaml", &base_dir, workflow);
     let mut f = File::open(&path).await?;
 
     let mut contents = String::new();
@@ -129,9 +129,10 @@ async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<St
 }
 
 pub async fn router_main(base_dir: String,
+                         workflow: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>) {
-    let routes_res = read_config(base_dir.clone()).await;
+    let routes_res = read_config(base_dir.clone(), &workflow).await;
     if let Err(e) = routes_res {
         error!("Error loading routes: {}", &e);
         exit(1);

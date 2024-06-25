@@ -15,7 +15,7 @@ impl ConfigId {
         let description = get_value_or_unknown(&self.description);
 
         info!(r#"
-    ID->
+ID->
     id:          {}
     name:        {}
     description: {}"#, &self.id, &name, &description);

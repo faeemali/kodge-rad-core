@@ -1,8 +1,7 @@
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
-use std::time::Duration;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use tokio::io::{Interest};
 use tokio::net::{TcpListener, TcpStream};
@@ -271,11 +270,12 @@ async fn process_connection(sock: TcpStream,
     Ok(())
 }
 
-pub async fn broker_main(base_dir: String, cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
+///start the broker, which includes the socket listener, router, and control plane
+pub async fn broker_main(base_dir: String, workflow: String, cfg: BrokerConfig) -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
-    tokio::spawn(router_main(base_dir.clone(), router_ctrl_rx, router_conn_rx));
+    tokio::spawn(router_main(base_dir.clone(), workflow, router_ctrl_rx, router_conn_rx));
 
     let (ctrl_tx, ctrl_rx) = channel(32);
     tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone()));

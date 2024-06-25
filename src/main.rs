@@ -7,7 +7,6 @@ use tokio::sync::Mutex;
 use log::{info, warn};
 
 use crate::app::{workflow_exists, get_all_workflows};
-use crate::broker::broker::broker_main;
 use crate::config::config::{Config, config_load};
 use crate::error::RadError;
 use crate::workflow::execute_workflow;
