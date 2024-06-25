@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref};
 use std::sync::Arc;
@@ -6,40 +5,15 @@ use std::time::Duration;
 use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::{AppCtx};
-use crate::app::{App, AppIoDefinition, load_app, STDERR, STDIN, STDOUT};
+use crate::app::{App, load_app};
 use crate::broker::broker::{broker_main};
 use crate::config::config_common::ConfigId;
-use crate::error::RadError;
 use crate::process::run_app_main;
 use crate::utils::utils::load_yaml;
-
-/* 
-    the io direction from the app's point of view. The typical use case
-    is eg. to read from the app and write to a channel, or read from a channel
-    and write to the app.
-    
-    Since everything is from the app's point of view, reading from the app
-    means we must read from the app's output, therefore the direction
-    will be Out. Similarly, writing to the app means writing to it's input,
-    therefore the direction will be In.
- */
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum AppIoDirection {
-    Out,
-    In,
-}
-
-struct ConnectorHolder<'a> {
-    pub app_id: String,
-    pub definition: &'a AppIoDefinition,
-    pub connected: bool, //has this connection been used?
-    pub direction: AppIoDirection,
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct Workflow {
@@ -56,45 +30,7 @@ impl Workflow {
         }
         Ok(())
     }
-
-    fn __verify_stdin(&self, wf_ctx: &WorkflowCtx, in_name: &str) -> Result<(), Box<dyn Error>> {
-        let app = load_app(&wf_ctx.base_dir, in_name)?;
-
-        /* ensure this app does not have anything connected to its input */
-        if let Some(inputs) = app.io.input {
-            for input in &inputs {
-                if input.integration.integration_type == STDIN {
-                    return Ok(());
-                }
-            }
-        }
-
-        Err(Box::new(RadError::from(format!("stdin not specified for this app: {}", &app.id.id))))
-    }
-
-    fn __verify_stdout_err(&self, wf_ctx: &WorkflowCtx, in_name: &str, out: bool) -> Result<(), Box<dyn Error>> {
-        let app = load_app(&wf_ctx.base_dir, in_name)?;
-
-        /* ensure this app does not have anything connected to its input */
-        if let Some(outputs) = app.io.output {
-            for output in &outputs {
-                if out {
-                    if output.integration.integration_type == STDOUT {
-                        return Ok(());
-                    }
-                } else if output.integration.integration_type == STDERR {
-                    return Ok(());
-                }
-            }
-        }
-
-        if out {
-            Err(Box::new(RadError::from(format!("stdout not a required output in app {}", &app.id.id))))
-        } else {
-            Err(Box::new(RadError::from(format!("stderr not a required output in app {}", &app.id.id))))
-        }
-    }
-
+    
     fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
         self.id.print();
 
@@ -108,73 +44,6 @@ impl Workflow {
 pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
-}
-
-fn __find_connector<'a>(conn_id: &str, app: &'a App) -> Result<&'a AppIoDefinition, Box<dyn Error>> {
-    let connector = match find_connector_in_app(conn_id, app) {
-        Some(c) => c,
-        None => {
-            return Err(Box::new(RadError::from(format!("Connector {} not found in app {}. Unexpected", &conn_id, &app.id.id))));
-        }
-    };
-    Ok(connector)
-}
-
-fn find_connector_in_app<'a>(connector_id: &str, app: &'a App) -> Option<&'a AppIoDefinition> {
-    if let Some(defs) = &app.io.input {
-        for def in defs {
-            if &def.id.id == connector_id {
-                return Some(def);
-            }
-        }
-    }
-
-    if let Some(defs) = &app.io.output {
-        for def in defs {
-            if &def.id.id == connector_id {
-                return Some(def);
-            }
-        }
-    }
-
-    None
-}
-
-fn __get_connectors<'a>(app_id: &str, io_opt: &'a Option<Vec<AppIoDefinition>>, direction: AppIoDirection)
-                        -> Vec<ConnectorHolder<'a>> {
-    let mut io_defs = vec![];
-    return if let Some(ios) = io_opt {
-        ios.iter().for_each(|i| {
-            let holder = ConnectorHolder {
-                app_id: app_id.to_string(),
-                definition: i,
-                connected: false,
-                direction,
-            };
-            io_defs.push(holder);
-        });
-
-        io_defs
-    } else {
-        vec![]
-    };
-}
-
-fn get_connectors_for_apps(apps: &[App]) -> Vec<ConnectorHolder> {
-    let mut connectors: Vec<ConnectorHolder> = vec![];
-    for app in apps {
-        let mut input_connectors = __get_connectors(&app.id.id,
-                                                    &app.io.input,
-                                                    AppIoDirection::In);
-        connectors.append(&mut input_connectors);
-
-        let mut output_connectors = __get_connectors(&app.id.id,
-                                                     &app.io.output,
-                                                     AppIoDirection::Out);
-        connectors.append(&mut output_connectors);
-    }
-
-    connectors
 }
 
 struct ExecutionCtx {

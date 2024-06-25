@@ -31,7 +31,6 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
         }
 
         RouterControlMessages::RemoveRoutes(name) => {}
-        _ => {}
     }
 }
 

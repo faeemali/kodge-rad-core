@@ -44,6 +44,7 @@ impl Timer {
         self.start_time = Timer::get_curr_time_as_millis();
     }
 
+    #[allow(dead_code)]
     pub fn reset_to_time(&mut self, val: Duration) {
         self.val = val.as_millis();
         self.start_time = Timer::get_curr_time_as_millis();
