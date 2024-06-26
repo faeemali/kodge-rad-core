@@ -2,7 +2,7 @@ use std::error::Error;
 use std::time::Duration;
 use log::{debug};
 use serde::{Deserialize, Serialize};
-use crate::broker::protocol::States::{GetBody, GetFooter, GetHeader, GetMessageHeader};
+use crate::broker::protocol::States::{GetBody, GetCrc, GetFooter, GetHeader, GetMessageHeader};
 use crate::error::RadError;
 use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
@@ -27,10 +27,8 @@ pub struct Message {
 pub const HEADER: u8 = 0xAA;
 pub const FOOTER: u8 = 0x55;
 
-const MAX_MSG_LENGTH: usize = 1048576; //1MB
-const MAX_NAME_LENGTH: usize = 32;
-const MAX_RK_LENGTH: usize = 128;
-
+const MAX_MSG_BODY_LENGTH: usize = 1048576; //1MB
+const MAX_MSG_HEADER_LENGTH: usize = 1024;
 const MSG_RX_TIMEOUT_MS: u64 = 10000;
 
 pub struct Protocol {
@@ -80,6 +78,7 @@ impl Protocol {
         self.header = None;
         self.timer.reset();
         self.calculated_crc = 0xFFFF;
+        self.state = GetHeader;
     }
 
     fn is_valid_msg_type_char(c: char) -> bool {
@@ -154,7 +153,7 @@ impl Protocol {
                             continue;
                         }
 
-                        if msg_header.length > MAX_MSG_LENGTH as u32 {
+                        if msg_header.length > MAX_MSG_BODY_LENGTH as u32 {
                             debug!("Invalid message length");
                             self.reset();
                             continue;
@@ -164,22 +163,33 @@ impl Protocol {
 
                         self.partial_reset();
                         self.state = GetBody;
+                        continue;
                     }
 
                     self.msg_buffer.push(*b);
+                    if self.msg_buffer.len() >= MAX_MSG_HEADER_LENGTH {
+                        debug!("Overflow detected on message header. Ignoring");
+                        self.reset();
+                        continue;
+                    }
                 }
 
                 GetBody => {
                     self.msg_buffer.push(*b);
                     self.calculated_crc = crc16_for_byte(self.calculated_crc, *b);
 
+                    if self.msg_buffer.len() >= MAX_MSG_BODY_LENGTH {
+                        debug!("Message body overflow detected");
+                        self.reset();
+                        continue;
+                    }
+
                     if let Some(s) = &self.header {
                         if self.msg_buffer.len() == s.length as usize {
-                            self.partial_reset();
-                            self.state = GetFooter;
+                            //do NOT reset the message buffer yet
+                            self.state = GetCrc;
                             continue;
                         }
-
                     } else {
                         debug!("Unexpected error: message header is none while trying to retrieve body");
                         self.reset();
@@ -187,7 +197,7 @@ impl Protocol {
                     }
                 }
 
-                States::GetCrc=> {
+                GetCrc=> {
                     /* use the high byte as a counter */
                     if (self.retrieved_crc >> 24) == 0 {
                         //byte0
@@ -204,7 +214,7 @@ impl Protocol {
                             continue;
                         }
 
-                        self.partial_reset();
+                        //do NOT reset the message buffer here
                         self.state = GetFooter;
                     }
                 }

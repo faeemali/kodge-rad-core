@@ -3,11 +3,11 @@ use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use tokio::io::{Interest};
+use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
-use crate::broker::auth::{authenticate, AuthMessage, MSG_TYPE_AUTH};
+use crate::broker::auth::{authenticate, AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
@@ -71,7 +71,7 @@ async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -
         return Err(Box::new(RadError::from("Invalid message for authentication")));
     }
 
-    let auth_msg = serde_json::from_slice::<AuthMessage>(auth_msg_wrapper.body.as_slice())?;
+    let auth_msg = serde_json::from_slice::<AuthMessageReq>(auth_msg_wrapper.body.as_slice())?;
 
     if authenticate(&auth_msg).await? {
         conn_ctx.auth_message = Some(auth_msg);
@@ -105,16 +105,15 @@ async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn E
 
         conn_ctx.ctrl_tx.send(RegisterMessage(reg)).await?;
         conn_ctx.state = Process;
-
+        
         Ok(())
     } else {
         Err(Box::new(RadError::from("Failed to get register details (unexpected)")))
     }
 }
 
-async fn process_messages(conn_ctx: &mut ConnectionCtx,
-                          msgs: Vec<Message>)
-                          -> Result<bool, Box<dyn Error + Sync + Send>> {
+async fn register_connection(conn_ctx: &mut ConnectionCtx,
+                            msgs: Vec<Message>) -> Result<AuthMessageResp, Box<dyn Error + Sync + Send>>{
     if conn_ctx.state == Authenticate {
         __authenticate_client(conn_ctx, &msgs).await?;
     }
@@ -123,6 +122,14 @@ async fn process_messages(conn_ctx: &mut ConnectionCtx,
         __register_client(conn_ctx).await?;
     }
 
+    Ok(AuthMessageResp {
+        success: true
+    })
+}       
+
+async fn process_messages(conn_ctx: &mut ConnectionCtx,
+                          msgs: Vec<Message>)
+                          -> Result<bool, Box<dyn Error + Sync + Send>> {
     /* check for messages from the control plane */
     let action = __get_control_message(conn_ctx).await?;
     if action == MustDisconnect {
@@ -143,7 +150,7 @@ async fn process_messages(conn_ctx: &mut ConnectionCtx,
 }
 
 struct ConnectionCtx {
-    pub auth_message: Option<AuthMessage>,
+    pub auth_message: Option<AuthMessageReq>,
     pub state: States,
     pub name: Option<String>,
     pub protocol: Protocol,
@@ -175,6 +182,7 @@ async fn process_connection(sock: TcpStream,
 
 
     let mut must_read = false;
+    let mut registered = false;
     loop {
         must_read = !must_read;
 
@@ -193,6 +201,20 @@ async fn process_connection(sock: TcpStream,
                         break;
                     }
                     let msgs = conn_ctx.protocol.feed(&data);
+                    if !registered {
+                        match register_connection(&mut conn_ctx, msgs.clone()).await {
+                            Ok(r) => {
+                                let bytes = serde_json::to_vec(&r)?;
+                                sock.try_write(bytes.as_slice())?;
+                                registered = true;
+                            }
+                            Err(e) => {
+                                error!("Registration error: {}", &e);
+                                break;
+                            }
+                        }
+                    }
+                    
                     let process_res = process_messages(&mut conn_ctx, msgs).await;
                     match process_res {
                         Ok(must_continue) => {
