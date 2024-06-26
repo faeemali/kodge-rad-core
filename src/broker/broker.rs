@@ -1,12 +1,14 @@
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
-use log::{debug, error, info};
+use std::time::Duration;
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::time::sleep;
 use crate::broker::auth::{authenticate, AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
@@ -15,6 +17,7 @@ use crate::broker::control::ControlMessages::RegisterMessage;
 use crate::broker::protocol::{Message, Protocol};
 use crate::broker::router::router_main;
 use crate::error::RadError;
+use crate::utils::utils;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BrokerConfig {
@@ -106,7 +109,7 @@ async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn E
 
         conn_ctx.ctrl_tx.send(RegisterMessage(reg)).await?;
         conn_ctx.state = Process;
-        
+
         Ok(())
     } else {
         Err(Box::new(RadError::from("Failed to get register details (unexpected)")))
@@ -114,19 +117,21 @@ async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn E
 }
 
 async fn register_connection(conn_ctx: &mut ConnectionCtx,
-                            msgs: Vec<Message>) -> Result<AuthMessageResp, Box<dyn Error + Sync + Send>>{
+                             msgs: Vec<Message>) -> Result<AuthMessageResp, Box<dyn Error + Sync + Send>> {
     if conn_ctx.state == Authenticate {
         __authenticate_client(conn_ctx, &msgs).await?;
     }
+    debug!("Client successfully authenticated");
 
     if conn_ctx.state == Register {
         __register_client(conn_ctx).await?;
     }
+    debug!("Client successfully registered");
 
     Ok(AuthMessageResp {
         success: true
     })
-}       
+}
 
 async fn process_messages(conn_ctx: &mut ConnectionCtx,
                           msgs: Vec<Message>)
@@ -181,26 +186,30 @@ async fn process_connection(sock: TcpStream,
         router_rx: None,
     };
 
-
-    let mut must_read = false;
     let mut registered = false;
     loop {
-        must_read = !must_read;
+        let mut busy = false;
 
-        let ready = if !must_read {
-            /* XXX Note: the example says to use a bitwise | here, but that never works!!!. if READABLE | WRITABLE is used, only writable is ever set */
-            sock.ready(Interest::WRITABLE).await?
-        } else {
-            sock.ready(Interest::READABLE).await?
-        };
+        let ready = sock.ready(Interest::WRITABLE | Interest::READABLE).await?;
+
+        if ready.is_error() || ready.is_read_closed() || ready.is_write_closed() {
+            error!("Error determining socket readiness, or reader/writer closed. Aborting connection");
+            break;
+        }
 
         if ready.is_readable() {
+            //println!("readable");
+
             let mut data = [0u8; 1024];
             match sock.try_read(&mut data) {
                 Ok(n) => {
                     if n == 0 {
+                        warn!("Socket connection closed");
                         break;
                     }
+
+                    busy = true;
+
                     let msgs = conn_ctx.protocol.feed(&data);
                     if !registered {
                         match register_connection(&mut conn_ctx, msgs.clone()).await {
@@ -216,7 +225,7 @@ async fn process_connection(sock: TcpStream,
                         }
                         continue;
                     }
-                    
+
                     let process_res = process_messages(&mut conn_ctx, msgs).await;
                     match process_res {
                         Ok(must_continue) => {
@@ -231,9 +240,7 @@ async fn process_connection(sock: TcpStream,
                         }
                     }
                 }
-                Err(ref e) if e.kind() == WouldBlock => {
-                    continue;
-                }
+                Err(ref e) if e.kind() == WouldBlock => {}
                 Err(e) => {
                     error!("Read error: {}", &e);
                     break;
@@ -241,56 +248,61 @@ async fn process_connection(sock: TcpStream,
             }
         }
 
-        if ready.is_writable() && !must_read {
+        if ready.is_writable() {
+            //println!("writable");
+
             /* must read messages from the router and forward to the app */
             if let Some(rx) = &mut conn_ctx.router_rx {
-                loop {
-                    match rx.try_recv() {
-                        Ok(msg) => {
-                            let encoded_msg_res = Protocol::format(&msg);
-                            if let Err(e) = encoded_msg_res {
-                                debug!("Error encoding message: {}. Ignoring.", &e);
-                                continue;
-                            }
-                            let encoded_msg = encoded_msg_res.unwrap();
-                            let encoded_slice = encoded_msg.as_slice();
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        busy = true;
+                        let encoded_msg_res = Protocol::format(&msg);
+                        if let Err(e) = encoded_msg_res {
+                            debug!("Error encoding message: {}. Ignoring.", &e);
+                            continue;
+                        }
+                        let encoded_msg = encoded_msg_res.unwrap();
+                        let encoded_slice = encoded_msg.as_slice();
 
-                            let mut pos = 0usize;
-                            loop {
-                                let res = sock.try_write(&encoded_slice[pos..]);
-                                match res {
-                                    Ok(n) => {
-                                        pos = n;
-                                        if pos == encoded_slice.len() {
-                                            break; //break out of the write loop
-                                        }
+                        let mut pos = 0usize;
+                        loop {
+                            let res = sock.try_write(&encoded_slice[pos..]);
+                            match res {
+                                Ok(n) => {
+                                    pos = n;
+                                    if pos == encoded_slice.len() {
+                                        break; //break out of the write loop
                                     }
-                                    Err(ref e) if e.kind() == WouldBlock => {
-                                        continue;
-                                    }
+                                }
+                                Err(ref e) if e.kind() == WouldBlock => {
+                                    continue;
+                                }
 
-                                    Err(e) => {
-                                        error!("Write error detected. Aborting. Error: {}", &e);
-                                        break;
-                                    }
+                                Err(e) => {
+                                    error!("Write error detected. Aborting. Error: {}", &e);
+                                    break;
                                 }
                             }
                         }
-
-                        Err(TryRecvError::Empty) => {
-                            continue;
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            error!("Router channel closed. Aborting");
-                            break;
-                        }
                     }
-                } //loop
+
+                    Err(TryRecvError::Empty) => {
+                        //println!("no messages from router");
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        error!("Router channel closed. Aborting");
+                        break;
+                    }
+                }
             }
         }
-    }
 
-    println!("Socket closing for", );
+        if !busy {
+            sleep(Duration::from_millis(10)).await;
+        }
+    } //loop
+
+    println!("Socket closing for {}", utils::get_value_or_unknown(&conn_ctx.name));
     Ok(())
 }
 

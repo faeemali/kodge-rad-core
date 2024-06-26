@@ -119,6 +119,8 @@ impl Protocol {
             if self.state != GetHeader && self.timer.timed_out() {
                 /* msg rx timeout */
                 self.reset();
+            } else {
+                self.timer.reset();
             }
 
 

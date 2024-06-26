@@ -23,7 +23,7 @@ const CRC16_TAB: [u16; 256] = [0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0
 pub fn crc16(curr_crc: u16, buf: &[u8], len: usize) -> u16 {
     let mut crc: u16 = curr_crc;
     for counter in 0..len {
-        crc = crc16_for_byte(curr_crc, buf[counter]);
+        crc = crc16_for_byte(crc, buf[counter]);
     }
     crc
 }
@@ -37,3 +37,12 @@ pub fn crc16_for_byte(curr_crc: u16, data: u8) -> u16 {
     let ret = shifted_l8 ^ table_item;
     ret
 }
+
+#[test]
+fn crc_test() {
+    let msg = "hello world".as_bytes();
+    let mut crc = 0xFFFFu16;
+    crc = crc16(crc, msg, msg.len());
+    assert_eq!(crc, 0xEFEBu16);
+}
+

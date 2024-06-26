@@ -1,5 +1,5 @@
 routes:
   - src:
-      app: test1
+      app: echo
     dst:
-      - test1
+      - echo

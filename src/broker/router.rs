@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::process::exit;
+use std::time::Duration;
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::time::sleep;
 use crate::broker::protocol::Message;
 
 /**
@@ -40,12 +42,14 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     let key = format!("{}/*", &msg.header.name);
     let val_opt = ctx.routes_map.get(&key);
     if let Some(val) = val_opt {
+        //println!("returning routes (0): {:?}", val);
         return Some(val);
     }
 
     let key = format!("{}/{}", &msg.header.name, &msg.header.msg_type);
     let val_opt = ctx.routes_map.get(&key);
     if let Some(val) = val_opt {
+        //println!("returning routes: {:?}", val);
         return Some(val);
     }
 
@@ -150,10 +154,13 @@ pub async fn router_main(base_dir: String,
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
+        let mut busy = false;
+
         //process messages from the control plane
         match m_ctrl_rx.try_recv() {
             Ok(msg) => {
                 process_control_message(&mut ctx, msg).await;
+                busy = true;
             }
             Err(e) => {
                 if e == TryRecvError::Disconnected {
@@ -167,6 +174,7 @@ pub async fn router_main(base_dir: String,
         match m_conn_rx.try_recv() {
             Ok(msg) => {
                 process_connection_message(&ctx, msg).await;
+                busy = true;
             }
 
             Err(e) => {
@@ -175,6 +183,10 @@ pub async fn router_main(base_dir: String,
                     break;
                 }
             }
+        }
+
+        if !busy {
+            sleep(Duration::from_millis(10)).await;
         }
     }
 
