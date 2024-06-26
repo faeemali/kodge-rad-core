@@ -75,6 +75,7 @@ async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -
 
     if authenticate(&auth_msg).await? {
         conn_ctx.auth_message = Some(auth_msg);
+        conn_ctx.state = Register;
         Ok(())
     } else {
         Err(Box::new(RadError::from("Authentication error")))
@@ -213,6 +214,7 @@ async fn process_connection(sock: TcpStream,
                                 break;
                             }
                         }
+                        continue;
                     }
                     
                     let process_res = process_messages(&mut conn_ctx, msgs).await;
