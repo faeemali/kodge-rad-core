@@ -1,3 +1,4 @@
+- include the workflow id in messages, to allow for inter-workflow routing
 - add apps
 - maybe add a runtime file for later termination of apps
 - build a ui

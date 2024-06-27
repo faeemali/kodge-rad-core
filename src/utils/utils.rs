@@ -1,9 +1,12 @@
 use std::error::Error;
 use std::fs::{File, read_dir};
+use std::ops::DerefMut;
 use std::path::Path;
+use std::sync::Arc;
 use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
    match opt {
@@ -33,7 +36,7 @@ pub fn get_dirs(dir_path: &Path) -> Result<Vec<String>, std::io::Error> {
     Ok(dirs)
 }
 
-pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error>>{
+pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error + Sync + Send>>{
     let path = Path::new(filename);
     let f = File::open(path)?;
     let yaml: T = serde_yaml::from_reader(&f)?;
@@ -43,4 +46,10 @@ pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error
 #[allow(dead_code)]
 pub fn decode_base64_byte_stream(encoded_data: &str) -> Result<Vec<u8>, DecodeError> {
     BASE64_STANDARD.decode(encoded_data)
+}
+
+pub async fn set_must_die(am_must_die: Arc<Mutex<bool>>) {
+    let mut must_die_mg = am_must_die.lock().await;
+    let must_die = must_die_mg.deref_mut();
+    *must_die = true;
 }

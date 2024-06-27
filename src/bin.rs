@@ -1,8 +1,7 @@
 use std::error::Error;
-use std::path::Path;
 use serde::{Deserialize, Serialize};
 use crate::config::config_common::{ConfigId};
-use crate::utils::utils::{get_dirs, load_yaml};
+use crate::utils::utils::{load_yaml};
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct BinExecution {
@@ -18,13 +17,13 @@ pub struct Bin {
 }
 
 impl Bin {
-    pub fn verify(&self) -> Result<(), Box<dyn Error>> {
+    pub fn verify(&self) -> Result<(), Box<dyn Error + Sync + Send>> {
         self.id.print();
         Ok(())
     }
 }
 
-pub fn load_bin(base_dir: &str, app_name: &str) -> Result<Bin, Box<dyn Error>> {
+pub fn load_bin(base_dir: &str, app_name: &str) -> Result<Bin, Box<dyn Error + Sync + Send>> {
     let filename = format!("{}/cache/{}/config.yaml", base_dir, app_name);
     let bin = load_yaml::<Bin>(&filename)?;
     Ok(bin)

@@ -9,7 +9,7 @@ pub struct Config {
     pub broker: BrokerConfig,
 }
 
-pub fn config_load(base_dir: &str) -> Result<Config, Box<dyn Error>> {
+pub fn config_load(base_dir: &str) -> Result<Config, Box<dyn Error + Sync + Send>> {
     let path = format!("{}/config.yaml", base_dir);
     let f = File::open(&path)?;
     let config = serde_yaml::from_reader::<&File, Config>(&f)?;

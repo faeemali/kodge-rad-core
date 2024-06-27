@@ -1,5 +1,5 @@
 id:
-  id: workflow2
+  id: workflow_echo
   name: simple echo
   description: some generic workflow description
 bins:

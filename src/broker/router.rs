@@ -117,8 +117,8 @@ struct RouteConfig {
     pub routes: Vec<Route>,
 }
 
-async fn read_config(base_dir: String, workflow: &str) -> Result<RouteConfig, Box<dyn Error>> {
-    let path = format!("{}/workflows/{}/routes.yaml", &base_dir, workflow);
+async fn read_config(workflow_base_dir: String) -> Result<RouteConfig, Box<dyn Error>> {
+    let path = format!("{}/routes.yaml", &workflow_base_dir);
     let mut f = File::open(&path).await?;
 
     let mut contents = String::new();
@@ -146,11 +146,10 @@ async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<St
     routes_map
 }
 
-pub async fn router_main(base_dir: String,
-                         workflow: String,
+pub async fn router_main(workflow_base_dir: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>) {
-    let routes_res = read_config(base_dir.clone(), &workflow).await;
+    let routes_res = read_config(workflow_base_dir.clone()).await;
     if let Err(e) = routes_res {
         error!("Error loading routes: {}", &e);
         exit(1);

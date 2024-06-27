@@ -1,0 +1,7 @@
+id:
+  id: app_echo
+  name:
+  description:
+workflows:
+  - name: workflow_echo
+    args:

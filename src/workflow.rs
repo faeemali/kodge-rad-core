@@ -13,6 +13,7 @@ use crate::{AppCtx};
 use crate::bin::{Bin, load_bin};
 use crate::broker::broker::{broker_main};
 use crate::config::config_common::ConfigId;
+use crate::error::RadError;
 use crate::process::run_bin_main;
 use crate::utils::utils::{get_dirs, load_yaml};
 
@@ -23,7 +24,7 @@ pub struct Workflow {
 }
 
 impl Workflow {
-    fn verify_bins(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
+    fn verify_bins(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
         for bin_name in &self.bins {
             info!("Found binary: {}", bin_name);
             let bin = load_bin(&wf_ctx.base_dir, bin_name)?;
@@ -32,7 +33,7 @@ impl Workflow {
         Ok(())
     }
 
-    fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
+    fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
         info!("Workflow: ");
         self.id.print();
 
@@ -81,13 +82,23 @@ impl WorkflowCtx {
     }
 }
 
-pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[String]) -> Result<(), Box<dyn Error>> {
-    tokio::spawn(broker_main(app_ctx.base_dir.clone(),
-                             workflow_name.to_string(),
-                             app_ctx.config.broker.clone()));
+pub async fn execute_workflow(app_ctx: AppCtx,
+                              workflow_id: String,
+                              args: Vec<String>)
+                              -> Result<(), Box<dyn Error + Sync + Send>> {
 
-    let filename = format!("{}/workflows/{}/workflow.yaml", app_ctx.base_dir, workflow_name);
-    let workflow: Workflow = load_yaml(&filename)?;
+    let (workflow, wf_dir) = match find_workflow_by_id(&app_ctx.base_dir, &workflow_id)? {
+        Some(wf_dir) => {
+            wf_dir
+        }
+        None => {
+            return Err(Box::new(RadError::from(format!("Workflow with id: {} does not exist", &workflow_id))));
+        }
+    };
+
+    tokio::spawn(broker_main(wf_dir, app_ctx.config.broker.clone()));
+
+    info!("Executing workflow: {}", &workflow.id.id);
 
     let mut bins = vec![];
     for bin_name in &workflow.bins {
@@ -111,8 +122,8 @@ pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[Str
     Ok(())
 }
 
-
-pub fn get_all_workflows(base_dir: &str) -> Result<Vec<ConfigId>, Box<dyn Error>> {
+/// returns a list of all workflow objects, and their associated directories
+pub fn get_all_workflows(base_dir: &str) -> Result<Vec<(Workflow, String)>, Box<dyn Error + Sync + Send>> {
     let filename = format!("{}/workflows", base_dir);
     let path = Path::new(filename.as_str());
     if !Path::exists(path) {
@@ -122,18 +133,24 @@ pub fn get_all_workflows(base_dir: &str) -> Result<Vec<ConfigId>, Box<dyn Error>
     let mut ret = vec![];
     let workflows = get_dirs(path)?;
     for workflow in &workflows {
-        let wf_path = format!("{}/{}/workflow.yaml", &filename, workflow);
+        let wf_dir = format!("{}/{}", &filename, workflow);
+        let wf_path = format!("{}/workflow.yaml", &wf_dir);
         let wf = load_yaml::<Workflow>(&wf_path)?;
-        ret.push(wf.id.clone());
+        ret.push((wf, wf_dir));
     }
 
     Ok(ret)
 }
 
-pub fn workflow_exists(base_dir: &str, wf_id: &str) -> Result<bool, Box<dyn Error>> {
+pub fn find_workflow_by_id(base_dir: &str, wf_id: &str) -> Result<Option<(Workflow, String)>, Box<dyn Error + Sync + Send>> {
+    let workflows = get_all_workflows(base_dir)?;
+    Ok(workflows.iter().find(|(wf, dir)| wf.id.id.eq(wf_id)).cloned())
+}
+
+pub fn workflow_exists(base_dir: &str, wf_id: &str) -> Result<bool, Box<dyn Error + Sync + Send>> {
     let wf_ids = get_all_workflows(base_dir)?;
-    for id in &wf_ids {
-        if id.id == wf_id {
+    for (wf, _) in &wf_ids {
+        if wf.id.id == wf_id {
             return Ok(true);
         }
     }

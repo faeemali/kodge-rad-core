@@ -56,12 +56,6 @@ fn spawn_process(base_dir: &str, app: &Bin) -> Result<Child, Box<dyn Error + Syn
     Ok(child)
 }
 
-async fn set_must_die(am_must_die: Arc<Mutex<bool>>) {
-    let mut must_die_mg = am_must_die.lock().await;
-    let must_die = must_die_mg.deref_mut();
-    *must_die = true;
-}
-
 pub async fn run_bin_main(base_dir: String,
                           app: Bin,
                           am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
