@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::process::exit;
 use std::time::Duration;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -32,9 +32,17 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
             ctx.connections.insert(conn.name.clone(), conn);
         }
 
-        RouterControlMessages::RemoveRoutes(name) => {}
+        RouterControlMessages::RemoveRoutes(name) => {
+            info!("Disconnecting {} from the router", &name);
+            ctx.connections.remove(&name);
+
+            //do not remove the static routes. They are "static", unlike connections
+            //which are dynamic
+        }
     }
 }
+
+
 
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
@@ -82,8 +90,13 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
 }
 
 struct RouterCtx {
+    /// the registration requests (name, allowed tx/rx messages)
     pub connections: HashMap<String, RegisterConnectionReq>,
+
+    /// the router configuration, as read from the config file
     pub route_config: RouteConfig,
+
+    /// a map of message types and their respective destinations
     pub routes_map: HashMap<String, Vec<String>>,
 }
 

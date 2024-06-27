@@ -13,7 +13,7 @@ use crate::broker::auth::{authenticate, AuthMessageReq, AuthMessageResp, MSG_TYP
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
-use crate::broker::control::ControlMessages::RegisterMessage;
+use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
 use crate::broker::protocol::{Message, Protocol};
 use crate::broker::router::router_main;
 use crate::error::RadError;
@@ -104,6 +104,7 @@ async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn E
             conn_router_tx, //for router to send messages to connection
         };
 
+        conn_ctx.name = Some(r.name.clone());
         conn_ctx.ctrl_rx = Some(ctrl_rx);
         conn_ctx.router_rx = Some(router_rx);
 
@@ -302,7 +303,12 @@ async fn process_connection(sock: TcpStream,
         }
     } //loop
 
-    println!("Socket closing for {}", utils::get_value_or_unknown(&conn_ctx.name));
+    let name = utils::get_value_or_unknown(&conn_ctx.name);
+    info!("Socket closing for {}", &name);
+
+    /* send a disconnect message to the control plane */
+    conn_ctx.ctrl_tx.send(DisconnectMessage(name)).await?;
+
     Ok(())
 }
 

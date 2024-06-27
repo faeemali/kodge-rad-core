@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::broker::control::ControlMessages::{DisconnectMessage};
 use crate::broker::protocol::Message;
@@ -96,6 +96,9 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
                     }
 
                     DisconnectMessage(name) => {
+                        debug!("Disconnecting {} from control plane", name);
+                        ctx.connections.remove(&name);
+                        
                         if let Err(e) = ctx.router_ctrl_tx.send(RemoveRoutes(name.clone())).await {
                             error!("Error notifying router to remove routes for: {}. Error: {}", name, &e);
                             break;
