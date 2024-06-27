@@ -32,7 +32,7 @@ impl Workflow {
     }
 
     fn verify(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
-        info!("verifying workflow: {}", &self.id.id);
+        info!("Workflow: ");
         self.id.print();
 
         info!("verifying apps");
@@ -45,18 +45,11 @@ impl Workflow {
 pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
-}
-
-struct ExecutionCtx {
-    pub base_dir: String,
     pub apps: Arc<Vec<App>>,
-
-    //if true, the workflow must die. Not using AtomicBool because of a note that says
-    //it's only supported on certain platforms
     pub must_die: Arc<Mutex<bool>>,
 }
 
-impl ExecutionCtx {
+impl WorkflowCtx {
     /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
     pub async fn run_apps(&mut self) {
         let apps = self.apps.deref();
@@ -102,20 +95,17 @@ pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[Str
     }
     let a_apps = Arc::new(apps);
 
-    let wf_ctx = WorkflowCtx {
-        base_dir: app_ctx.base_dir.to_string(),
-        workflow,
-    };
-
-    wf_ctx.workflow.verify(&wf_ctx)?;
-    let mut exec_ctx = ExecutionCtx {
+    let mut wf_ctx = WorkflowCtx {
         base_dir: app_ctx.base_dir.to_string(),
         apps: a_apps,
+        workflow,
         must_die: app_ctx.must_die.clone(),
     };
 
+    wf_ctx.workflow.verify(&wf_ctx)?;
+
     /* start each app in the map */
-    exec_ctx.run_apps().await;
+    wf_ctx.run_apps().await;
 
     Ok(())
 }

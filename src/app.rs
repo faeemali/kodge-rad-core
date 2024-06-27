@@ -8,6 +8,7 @@ use crate::utils::utils::{get_dirs, load_yaml};
 pub struct AppExecution {
     pub cmd: String,
     pub args: Option<Vec<String>>,
+    pub working_dir: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]

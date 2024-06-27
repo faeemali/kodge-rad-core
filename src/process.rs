@@ -4,7 +4,7 @@ use tokio::process::{Child, Command};
 use std::process::{ExitStatus};
 use std::sync::Arc;
 use std::time::Duration;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::app::{App};
@@ -30,12 +30,26 @@ async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<Exit
 }
 
 fn spawn_process(base_dir: &str, app: &App) -> Result<Child, Box<dyn Error + Sync + Send>> {
-    let path = format!("{}/cache/{}/{}", base_dir, &app.id.id, &app.execution.cmd);
+    let exec_cmd = &app.execution.cmd;
+    let path = if exec_cmd.starts_with('/') {
+        debug!("Executing external app: {}", exec_cmd);
+        exec_cmd.to_string()
+    } else {
+        debug!("Executing included app: {}", exec_cmd);
+        format!("{}/cache/{}/{}", base_dir, &app.id.id, exec_cmd)
+    };
+    
     let mut cmd = Command::new(path);
     let mut process = cmd.kill_on_drop(true);
 
     if let Some(args) = &app.execution.args {
+        debug!("Using args: {:?} for {}", args, exec_cmd);
         process = process.args(args);
+    }
+    
+    if let Some(working_dir) = &app.execution.working_dir {
+        debug!("Using working dir: {:?} for {}", working_dir, exec_cmd);
+        process.current_dir(working_dir);
     }
 
     let child = process.spawn()?;

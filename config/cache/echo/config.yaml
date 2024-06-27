@@ -5,5 +5,7 @@ id:
   #description is optional
   description: echoes data
 execution:
-  cmd: echo.sh
-  args:
+  cmd: /Users/fali/Projects/kodgehopper/code/rad/rad-apps-go/rad-echo/rad-echo
+  args: 
+    - config
+  working_dir: /Users/fali/Projects/kodgehopper/code/rad/rad-apps-go/rad-echo
