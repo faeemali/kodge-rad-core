@@ -13,7 +13,7 @@ use crate::workflow::{execute_workflow, get_all_workflows, workflow_exists};
 mod utils;
 mod error;
 mod config;
-mod app;
+mod bin;
 mod workflow;
 mod process;
 mod broker;

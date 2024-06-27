@@ -10,24 +10,24 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::{AppCtx};
-use crate::app::{App, load_app};
+use crate::bin::{Bin, load_bin};
 use crate::broker::broker::{broker_main};
 use crate::config::config_common::ConfigId;
-use crate::process::run_app_main;
+use crate::process::run_bin_main;
 use crate::utils::utils::{get_dirs, load_yaml};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Workflow {
     pub id: ConfigId,
-    pub apps: Vec<String>,
+    pub bins: Vec<String>,
 }
 
 impl Workflow {
-    fn verify_apps(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
-        for app_name in &self.apps {
-            info!("Found app: {}", app_name);
-            let app = load_app(&wf_ctx.base_dir, app_name)?;
-            app.verify()?;
+    fn verify_bins(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error>> {
+        for bin_name in &self.bins {
+            info!("Found binary: {}", bin_name);
+            let bin = load_bin(&wf_ctx.base_dir, bin_name)?;
+            bin.verify()?;
         }
         Ok(())
     }
@@ -36,8 +36,8 @@ impl Workflow {
         info!("Workflow: ");
         self.id.print();
 
-        info!("verifying apps");
-        self.verify_apps(wf_ctx)?;
+        info!("verifying binaries");
+        self.verify_bins(wf_ctx)?;
 
         Ok(())
     }
@@ -46,29 +46,29 @@ impl Workflow {
 pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
-    pub apps: Arc<Vec<App>>,
+    pub bins: Arc<Vec<Bin>>,
     pub must_die: Arc<Mutex<bool>>,
 }
 
 impl WorkflowCtx {
     /* checks the list of connectors to see if we must grab stdin, stdout, stderr */
-    pub async fn run_apps(&mut self) {
-        let apps = self.apps.deref();
-        for app in apps {
-            tokio::spawn(run_app_main(self.base_dir.to_string(),
-                                      app.clone(),
+    pub async fn run_bins(&mut self) {
+        let bins = self.bins.deref();
+        for bin in bins {
+            tokio::spawn(run_bin_main(self.base_dir.to_string(),
+                                      bin.clone(),
                                       self.must_die.clone()));
         }
 
-        self.monitor_apps().await;
-        warn!("apps terminated");
+        self.monitor_bins().await;
+        warn!("bins terminated");
     }
 
     async fn must_die(&self) -> bool {
         *self.must_die.lock().await
     }
 
-    async fn monitor_apps(&self) {
+    async fn monitor_bins(&self) {
         loop {
             if self.must_die().await {
                 warn!("Workflow detected must_die flag. Aborting after 1s");
@@ -89,24 +89,24 @@ pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[Str
     let filename = format!("{}/workflows/{}/workflow.yaml", app_ctx.base_dir, workflow_name);
     let workflow: Workflow = load_yaml(&filename)?;
 
-    let mut apps = vec![];
-    for app_name in &workflow.apps {
-        let app = load_app(&app_ctx.base_dir, app_name)?;
-        apps.push(app);
+    let mut bins = vec![];
+    for bin_name in &workflow.bins {
+        let bin = load_bin(&app_ctx.base_dir, bin_name)?;
+        bins.push(bin);
     }
-    let a_apps = Arc::new(apps);
+    let a_bins = Arc::new(bins);
 
     let mut wf_ctx = WorkflowCtx {
         base_dir: app_ctx.base_dir.to_string(),
-        apps: a_apps,
+        bins: a_bins,
         workflow,
         must_die: app_ctx.must_die.clone(),
     };
 
     wf_ctx.workflow.verify(&wf_ctx)?;
 
-    /* start each app in the map */
-    wf_ctx.run_apps().await;
+    /* start each binary in the map */
+    wf_ctx.run_bins().await;
 
     Ok(())
 }
@@ -116,7 +116,7 @@ pub fn get_all_workflows(base_dir: &str) -> Result<Vec<ConfigId>, Box<dyn Error>
     let filename = format!("{}/workflows", base_dir);
     let path = Path::new(filename.as_str());
     if !Path::exists(path) {
-        return Ok(vec![]); //no apps
+        return Ok(vec![]); //no binaries
     }
 
     let mut ret = vec![];

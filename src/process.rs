@@ -7,7 +7,7 @@ use std::time::Duration;
 use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use crate::app::{App};
+use crate::bin::{Bin};
 
 async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
     let must_die_mg = am_must_die.lock().await;
@@ -29,7 +29,7 @@ async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<Exit
     Ok(None)
 }
 
-fn spawn_process(base_dir: &str, app: &App) -> Result<Child, Box<dyn Error + Sync + Send>> {
+fn spawn_process(base_dir: &str, app: &Bin) -> Result<Child, Box<dyn Error + Sync + Send>> {
     let exec_cmd = &app.execution.cmd;
     let path = if exec_cmd.starts_with('/') {
         debug!("Executing external app: {}", exec_cmd);
@@ -62,8 +62,8 @@ async fn set_must_die(am_must_die: Arc<Mutex<bool>>) {
     *must_die = true;
 }
 
-pub async fn run_app_main(base_dir: String,
-                          app: App,
+pub async fn run_bin_main(base_dir: String,
+                          app: Bin,
                           am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
     let mut child = spawn_process(&base_dir, &app)?;
