@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::ops::{Deref};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{info, warn};
@@ -13,9 +14,9 @@ use crate::app::{App, load_app};
 use crate::broker::broker::{broker_main};
 use crate::config::config_common::ConfigId;
 use crate::process::run_app_main;
-use crate::utils::utils::load_yaml;
+use crate::utils::utils::{get_dirs, load_yaml};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Workflow {
     pub id: ConfigId,
     pub apps: Vec<String>,
@@ -111,3 +112,30 @@ pub async fn execute_workflow(app_ctx: &AppCtx, workflow_name: &str, args: &[Str
 }
 
 
+pub fn get_all_workflows(base_dir: &str) -> Result<Vec<ConfigId>, Box<dyn Error>> {
+    let filename = format!("{}/workflows", base_dir);
+    let path = Path::new(filename.as_str());
+    if !Path::exists(path) {
+        return Ok(vec![]); //no apps
+    }
+
+    let mut ret = vec![];
+    let workflows = get_dirs(path)?;
+    for workflow in &workflows {
+        let wf_path = format!("{}/{}/workflow.yaml", &filename, workflow);
+        let wf = load_yaml::<Workflow>(&wf_path)?;
+        ret.push(wf.id.clone());
+    }
+
+    Ok(ret)
+}
+
+pub fn workflow_exists(base_dir: &str, wf_id: &str) -> Result<bool, Box<dyn Error>> {
+    let wf_ids = get_all_workflows(base_dir)?;
+    for id in &wf_ids {
+        if id.id == wf_id {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

@@ -1,0 +1,6 @@
+id:
+  id: app1
+  name:
+  description:
+workflows:
+  - workflow3

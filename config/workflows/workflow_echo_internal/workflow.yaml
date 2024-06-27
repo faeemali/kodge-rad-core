@@ -1,10 +1,10 @@
 id:
-  id: workflow2
+  id: workflow3
   name: simple echo
   description: some generic workflow description
 apps:
-  - echo
+  - echo_internal
 stdio:
   stdin: 
-    app: echo
+    app: echo_internal
     msg_type: string

@@ -6,10 +6,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use log::{info, warn};
 
-use crate::app::{workflow_exists, get_all_workflows};
 use crate::config::config::{Config, config_load};
 use crate::error::RadError;
-use crate::workflow::execute_workflow;
+use crate::workflow::{execute_workflow, get_all_workflows, workflow_exists};
 
 mod utils;
 mod error;
@@ -28,15 +27,15 @@ pub struct AppCtx {
 fn show_help(app_name: &str) {
     println!("Usage: {} <config_dir> <command> [args...]", app_name);
     println!(r#"Commands:
-    list - list all applications
+    list_workflows - list all workflows
     run <app_name> [args] - runs the configured application
     "#)
 }
 
-fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error>> {
-    let apps = get_all_workflows(&app_ctx.base_dir)?;
-    for app in apps {
-        println!("{}", app);
+fn list_workflows(app_ctx: &AppCtx) -> Result<(), Box<dyn Error>> {
+    let workflows = get_all_workflows(&app_ctx.base_dir)?;
+    for workflow_id in &workflows {
+        workflow_id.print();
     }
     Ok(())
 }
@@ -53,11 +52,11 @@ async fn process_cmd(app_ctx: &AppCtx, cmd_line: &[String]) -> Result<(), Box<dy
     let app_name = &cmd_line[0];
     let cmd = cmd_line[2].trim().to_lowercase();
     match cmd.as_str() {
-        "list" => {
+        "list_workflows" => {
             if cmd_line.len() != 3 {
                 show_help(app_name);
             }
-            list_apps(app_ctx)?;
+            list_workflows(app_ctx)?;
         }
         "run" => {
             if cmd_line.len() < 4 {

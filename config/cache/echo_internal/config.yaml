@@ -1,0 +1,10 @@
+id:
+  id: echo_internal
+  #name is optional
+  name: echo script
+  #description is optional
+  description: echoes data
+execution:
+  cmd: echo.sh
+  args: 
+  working_dir:
