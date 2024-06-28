@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::ops::DerefMut;
 use tokio::process::{Child, Command};
 use std::process::{ExitStatus};
 use std::sync::Arc;

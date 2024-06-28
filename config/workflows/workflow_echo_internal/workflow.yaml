@@ -1,6 +1,6 @@
 id:
   id: workflow_echo_internal
-  name: simple echo
+  name: simple echo (internal)
   description: some generic workflow description
 bins:
   - echo_internal

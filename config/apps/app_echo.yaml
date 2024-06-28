@@ -3,5 +3,12 @@ id:
   name:
   description:
 workflows:
-  - name: workflow_echo
+  - name: workflow_echo_internal
     args:
+stdio:
+  stdin:
+    workflow: workflow_echo_internal
+    msg_type: string
+  stdout:
+    workflow: workflow_echo_internal
+    msg_type: string

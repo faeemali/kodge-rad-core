@@ -1,5 +1,5 @@
 pub mod broker;
-mod protocol;
+pub mod protocol;
 mod control;
 mod router;
 mod auth;

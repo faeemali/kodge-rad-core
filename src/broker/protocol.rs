@@ -21,7 +21,7 @@ where:
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Message {
     pub header: MessageHeader,
-   pub body: Vec<u8>,
+    pub body: Vec<u8>,
 }
 
 pub const HEADER: u8 = 0xAA;
@@ -143,14 +143,14 @@ impl Protocol {
                     if *b == 0x00 {
                         let msg_header_res: serde_json::error::Result<MessageHeader> = serde_json::from_slice(self.msg_buffer.as_slice());
                         if let Err(e) = msg_header_res {
-                            debug!("Error prcessing message header: {}", &e);
+                            debug!("Error processing message header: {}", &e);
                             self.reset();
                             continue;
                         }
 
                         let msg_header = msg_header_res.unwrap();
-                        if !self.is_valid_name(&msg_header.name) ||  !self.is_valid_msg_type(&msg_header.msg_type) {
-                            debug!("Invalid message name or type");
+                        if !self.is_valid_name(&msg_header.name) || !self.is_valid_msg_type(&msg_header.msg_type) {
+                            debug!("Invalid message name or type (protocol)");
                             self.reset();
                             continue;
                         }
@@ -199,7 +199,7 @@ impl Protocol {
                     }
                 }
 
-                GetCrc=> {
+                GetCrc => {
                     /* use the high byte as a counter */
                     if (self.retrieved_crc >> 24) == 0 {
                         //byte0
@@ -238,7 +238,6 @@ impl Protocol {
                                 continue;
                             }
                         }
-
                     } else if *b == HEADER {
                         self.reset();
                         self.state = GetMessageHeader;

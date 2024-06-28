@@ -6,12 +6,14 @@ use std::time::Duration;
 use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::{AppCtx};
 use crate::bin::{Bin, load_bin};
 use crate::broker::broker::{broker_main};
+use crate::broker::protocol::Message;
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::process::run_bin_main;
@@ -84,9 +86,10 @@ impl WorkflowCtx {
 
 pub async fn execute_workflow(app_ctx: AppCtx,
                               workflow_id: String,
-                              args: Vec<String>)
+                              args: Vec<String>,
+                              stdin_chan_opt: Option<Receiver<Message>>,
+                              stdout_chan_opt: Option<Sender<Message>>)
                               -> Result<(), Box<dyn Error + Sync + Send>> {
-
     let (workflow, wf_dir) = match find_workflow_by_id(&app_ctx.base_dir, &workflow_id)? {
         Some(wf_dir) => {
             wf_dir
@@ -96,8 +99,11 @@ pub async fn execute_workflow(app_ctx: AppCtx,
         }
     };
 
-    tokio::spawn(broker_main(wf_dir, app_ctx.config.broker.clone()));
-
+    tokio::spawn(broker_main(wf_dir, 
+                             app_ctx.config.broker.clone(), 
+                             stdin_chan_opt, 
+                             stdout_chan_opt));
+    
     info!("Executing workflow: {}", &workflow.id.id);
 
     let mut bins = vec![];

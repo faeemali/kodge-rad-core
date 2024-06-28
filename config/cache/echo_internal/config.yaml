@@ -1,7 +1,7 @@
 id:
   id: echo_internal
   #name is optional
-  name: echo script
+  name: echo script (internal)
   #description is optional
   description: echoes data
 execution:

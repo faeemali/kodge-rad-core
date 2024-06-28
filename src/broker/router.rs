@@ -9,7 +9,9 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
+use crate::app::STDOUT;
 use crate::broker::protocol::Message;
+use crate::error::RadError;
 
 /**
 The router accepts messages from all connections, then decides how best to route those
@@ -43,7 +45,6 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
 }
 
 
-
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
 async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
@@ -68,15 +69,27 @@ fn find_connection_by_name<'a>(ctx: &'a RouterCtx, name: &str) -> Option<&'a Reg
     ctx.connections.get(name)
 }
 
-///processes messages received from the various network connections
+/// processes messages received from the various network connections, or messages
+/// destined for network connections
 async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
     match __get_route_dst(ctx, &msg).await {
         Some(dsts) => {
             /* send message to all dsts */
             for dst in dsts {
-                if let Some(c) = find_connection_by_name(ctx, dst) {
+                if dst == STDOUT {
+                    if let Some(stdout) = &ctx.stdout_chan_opt {
+                        if let Err(e) = stdout.send(msg.clone()).await {
+                            error!("Error sending message of type {} to stdout. Error: {}", &msg.header.msg_type, &e);
+                            return;
+                        }
+                    } else {
+                        error!("Message should be routed to stdout but stdout channel is None");
+                        return;
+                    }
+                } else if let Some(c) = find_connection_by_name(ctx, dst) {
                     if let Err(e) = c.conn_tx.send(msg.clone()).await {
-                        warn!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
+                        error!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
+                        return;
                     }
                 } else {
                     debug!("dst {} does not exist. Unable to forward message", dst);
@@ -98,6 +111,9 @@ struct RouterCtx {
 
     /// a map of message types and their respective destinations
     pub routes_map: HashMap<String, Vec<String>>,
+
+    //for sending data to stdout
+    pub stdout_chan_opt: Option<Sender<Message>>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -127,7 +143,9 @@ async fn read_config(workflow_base_dir: String) -> Result<RouteConfig, Box<dyn E
     Ok(routes)
 }
 
-///Convert routes into key=="name/message_type" and val==dst
+/// Convert routes into key=="name/message_type" and val==dst
+/// The special source \[stdin] and the special dst \[stdout]
+/// link the the route to stdin/stdout
 async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<String>> {
     let mut routes_map = HashMap::new();
     for route in &route_config.routes {
@@ -146,9 +164,48 @@ async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<St
     routes_map
 }
 
+pub async fn get_message_from_src(conn: &mut Receiver<Message>,
+                                  stdin_opt: &mut Option<Receiver<Message>>)
+                                  -> Result<Vec<Message>, Box<dyn Error + Sync + Send>> {
+    let mut msgs = vec![];
+
+    match conn.try_recv() {
+        Ok(msg) => {
+            msgs.push(msg);
+        }
+
+        Err(e) => {
+            if e == TryRecvError::Disconnected {
+                let msg = "Router connection disconnect detected. Aborting";
+                error!("{}", msg);
+                return Err(Box::new(RadError::from(msg)));
+            }
+        }
+    }
+
+    if let Some(stdin) = stdin_opt {
+        match stdin.try_recv() {
+            Ok(msg) => {
+                msgs.push(msg);
+            }
+            Err(e) => {
+                if e == TryRecvError::Disconnected {
+                    let msg = "Router stdin disconnect detected. Aborting";
+                    error!("{}", msg);
+                    return Err(Box::new(RadError::from(msg)));
+                }
+            }
+        }
+    }
+
+    Ok(msgs)
+}
+
 pub async fn router_main(workflow_base_dir: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
-                         conn_rx: Receiver<Message>) {
+                         conn_rx: Receiver<Message>,
+                         stdin_chan_opt: Option<Receiver<Message>>,
+                         stdout_chan_opt: Option<Sender<Message>>) {
     let routes_res = read_config(workflow_base_dir.clone()).await;
     if let Err(e) = routes_res {
         error!("Error loading routes: {}", &e);
@@ -161,8 +218,10 @@ pub async fn router_main(workflow_base_dir: String,
         connections: HashMap::new(),
         route_config,
         routes_map,
+        stdout_chan_opt,
     };
 
+    let mut m_stdin_chan_opt = stdin_chan_opt;
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
@@ -182,18 +241,16 @@ pub async fn router_main(workflow_base_dir: String,
             }
         }
 
-        //process messages from connections
-        match m_conn_rx.try_recv() {
-            Ok(msg) => {
+        //process messages from stdin or one of the connections
+        let msgs_res = get_message_from_src(&mut m_conn_rx, &mut m_stdin_chan_opt).await;
+        if let Err(e) = msgs_res {
+            let msg = format!("Error retrieving source messages: {}", &e);
+            error!("{}", &msg);
+        } else {
+            let msgs = msgs_res.unwrap();
+            for msg in msgs {
                 process_connection_message(&ctx, msg).await;
                 busy = true;
-            }
-
-            Err(e) => {
-                if e == TryRecvError::Disconnected {
-                    error!("Router connection disconnect detected. Aborting");
-                    break;
-                }
             }
         }
 

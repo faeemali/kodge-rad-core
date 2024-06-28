@@ -53,11 +53,12 @@ fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
     Ok(())
 }
 
+/// Run a workflow that's not linked to stdin or stdout (an app is required for that)
 async fn run_workflow(app_ctx: AppCtx, wf_name: &str, args: Vec<String>) -> Result<(), Box<dyn Error + Sync + Send>> {
     if !workflow_exists(&app_ctx.base_dir, wf_name)? {
         return Err(Box::new(RadError::from("App not found")));
     }
-    execute_workflow(app_ctx, wf_name.to_string(), args).await?;
+    execute_workflow(app_ctx, wf_name.to_string(), args, None, None).await?;
     Ok(())
 }
 

@@ -1,13 +1,12 @@
 use std::error::Error;
 use std::fs;
-use std::ops::DerefMut;
-use std::time::Duration;
-use log::{error, info};
+use std::io::{Read, stdin, stdout, Write};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::select;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinSet;
-use tokio::time::sleep;
 use crate::AppCtx;
+use crate::broker::protocol::{Message, MessageHeader};
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::utils::utils;
@@ -18,12 +17,25 @@ use crate::workflow::execute_workflow;
 pub struct App {
     pub id: ConfigId,
     pub workflows: Vec<AppWorkflowItem>,
+    pub stdio: AppStdio,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppWorkflowItem {
     pub name: String,
     pub args: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AppStdio {
+    pub stdin: StdioItem,
+    pub stdout: StdioItem,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StdioItem {
+    pub workflow: String,
+    pub msg_type: String,
 }
 
 pub fn get_all_apps(base_dir: &str) -> Result<Vec<App>, Box<dyn Error + Sync + Send>> {
@@ -62,6 +74,70 @@ fn find_app_by_id(base_dir: &str, app_id: &str) -> Result<Option<App>, Box<dyn E
     Ok(app)
 }
 
+pub const STDIN: &str = "stdin";
+pub const STDOUT: &str = "stdout";
+
+async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>, msg_type: String) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut b = [0u8; 1024];
+    loop {
+        let size_res = stdin().read(&mut b);
+        if let Err(e) = size_res {
+            let msg = format!("Error reading from stdin: {}. Aborting", &e);
+            error!("{}", &msg);
+            return Err(Box::new(RadError::from(msg)));
+        }
+
+        let size = size_res.unwrap();
+        if size == 0 {
+            warn!("EOF on stdin. Aborting");
+            break;
+        }
+
+        stdin_tx.send(Message {
+            header: MessageHeader {
+                name: STDIN.to_string(),
+                msg_type: msg_type.to_string(),
+                length: size as u32,
+            },
+            body: b[0..size].to_vec(),
+        }).await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_stdout_passthrough_main(stdout_rx: Receiver<Message>, msg_type: String) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut stdout_rx = stdout_rx;
+
+    loop {
+        let msg = match stdout_rx.recv().await {
+            Some(m) => m,
+            None => {
+                error!("stdout receiver closed");
+                break;
+            }
+        };
+
+        if msg.header.msg_type != msg_type {
+            warn!("stdout ignoring message of type: {}", &msg_type);
+            continue;
+        }
+
+        match stdout().write_all(msg.body.as_slice()) {
+            Ok(r) => {
+
+            }
+            Err(e) => {
+                let msg = format!("stdout tx error: {}", &e);
+                error!("{}", &msg);
+                return Err(Box::new(RadError::from(msg)));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let app = match find_app_by_id(&app_ctx.base_dir, app_id)? {
         Some(a) => { a }
@@ -74,7 +150,29 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
     let mut join_set = JoinSet::new();
 
     for wf in app.workflows {
-        join_set.spawn(execute_workflow(app_ctx.clone(), wf.name.clone(), wf.args.clone()));
+        /* handle stdin passthrough */
+        let stdin_chan = if wf.name == app.stdio.stdin.workflow {
+            let (stdin_tx, stdin_rx) = channel(32);
+            join_set.spawn(handle_stdin_passthrough_main(stdin_tx, app.stdio.stdin.msg_type.clone()));
+            Some(stdin_rx)
+        } else {
+            None
+        };
+
+        /* handle stdout passthrough */
+        let stdout_chan = if wf.name == app.stdio.stdout.workflow {
+            let (stdout_tx, stdout_rx) = channel(32);
+            join_set.spawn(handle_stdout_passthrough_main(stdout_rx, app.stdio.stdout.msg_type.clone()));
+            Some(stdout_tx)
+        } else {
+            None
+        };
+
+        join_set.spawn(execute_workflow(app_ctx.clone(),
+                                        wf.name.clone(),
+                                        wf.args.clone(),
+                                        stdin_chan,
+                                        stdout_chan));
     }
 
     // loop {
@@ -102,11 +200,11 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                 }
             }
         }
-        
+
         None => {
             return Err(Box::new(RadError::from("Unexpected error. Got none while waiting for workflows to complete")));
         }
     }
-    
+
     Ok(())
 }
