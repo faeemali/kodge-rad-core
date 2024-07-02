@@ -19,6 +19,7 @@ mod workflow;
 mod process;
 mod broker;
 mod app;
+mod app_container;
 
 #[derive(Clone)]
 pub struct AppCtx {

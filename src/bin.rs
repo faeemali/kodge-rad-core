@@ -11,21 +11,21 @@ pub struct BinExecution {
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
-pub struct Bin {
+pub struct BinConfig {
     pub id: ConfigId,
     pub execution: BinExecution,
 }
 
-impl Bin {
+impl BinConfig {
     pub fn verify(&self) -> Result<(), Box<dyn Error + Sync + Send>> {
         self.id.print();
         Ok(())
     }
 }
 
-pub fn load_bin(base_dir: &str, app_name: &str) -> Result<Bin, Box<dyn Error + Sync + Send>> {
+pub fn load_bin(base_dir: &str, app_name: &str) -> Result<BinConfig, Box<dyn Error + Sync + Send>> {
     let filename = format!("{}/cache/{}/config.yaml", base_dir, app_name);
-    let bin = load_yaml::<Bin>(&filename)?;
+    let bin = load_yaml::<BinConfig>(&filename)?;
     Ok(bin)
 }
 

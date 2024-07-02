@@ -2,5 +2,9 @@ id:
   id: workflow_echo
   name: simple echo
   description: some generic workflow description
-bins:
-  - echo
+apps:
+  #specify the container and app options
+  - run_type: once
+    options: 
+    bin:
+      name: echo

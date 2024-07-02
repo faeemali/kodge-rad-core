@@ -1,4 +1,3 @@
-- add stdio support to apps
 - build binary container support
 - !!!(necessary?) include the workflow id in messages, to allow for inter-workflow routing
 - add apps
