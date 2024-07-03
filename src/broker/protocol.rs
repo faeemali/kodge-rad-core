@@ -249,7 +249,7 @@ impl Protocol {
         ret
     }
 
-    pub fn format(msg: &Message) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn format(msg: &Message) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut crc = 0xFFFFu16;
 
         let mut ret = vec![];

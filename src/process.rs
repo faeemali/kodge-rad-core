@@ -1,17 +1,13 @@
 use std::error::Error;
 use tokio::process::{Child, Command};
-use std::process::{ExitStatus};
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::bin::{BinConfig};
-
-async fn __get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
-    let must_die_mg = am_must_die.lock().await;
-    *must_die_mg
-}
+use crate::utils::utils;
 
 async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<ExitStatus>, Box<dyn Error + Sync + Send>> {
     let exit_opt_res = child.try_wait();
@@ -28,27 +24,38 @@ async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<Exit
     Ok(None)
 }
 
-fn spawn_process(base_dir: &str, app: &BinConfig) -> Result<Child, Box<dyn Error + Sync + Send>> {
-    let exec_cmd = &app.execution.cmd;
+pub fn spawn_process(base_dir: &str,
+                     bin_config: &BinConfig,
+                     capture_stdin: bool,
+                     capture_stdout: bool) -> Result<Child, Box<dyn Error + Sync + Send>> {
+    let exec_cmd = &bin_config.execution.cmd;
     let path = if exec_cmd.starts_with('/') {
         debug!("Executing external app: {}", exec_cmd);
         exec_cmd.to_string()
     } else {
         debug!("Executing included app: {}", exec_cmd);
-        format!("{}/cache/{}/{}", base_dir, &app.id.id, exec_cmd)
+        format!("{}/cache/{}/{}", base_dir, &bin_config.id.id, exec_cmd)
     };
-    
+
     let mut cmd = Command::new(path);
     let mut process = cmd.kill_on_drop(true);
 
-    if let Some(args) = &app.execution.args {
+    if let Some(args) = &bin_config.execution.args {
         debug!("Using args: {:?} for {}", args, exec_cmd);
         process = process.args(args);
     }
-    
-    if let Some(working_dir) = &app.execution.working_dir {
+
+    if let Some(working_dir) = &bin_config.execution.working_dir {
         debug!("Using working dir: {:?} for {}", working_dir, exec_cmd);
         process.current_dir(working_dir);
+    }
+
+    if capture_stdin {
+        process = process.stdin(Stdio::piped());
+    }
+
+    if capture_stdout {
+        process = process.stdout(Stdio::piped());
     }
 
     let child = process.spawn()?;
@@ -59,13 +66,17 @@ pub async fn run_bin_main(base_dir: String,
                           app: BinConfig,
                           am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
-    let mut child = spawn_process(&base_dir, &app)?;
+    let mut child = spawn_process(&base_dir,
+                                  &app,
+                                  false,
+                                  false)?;
 
     loop {
         match __check_app_exit(&mut child, &app.id.id).await {
             Ok(r_opt) => {
                 if let Some(status) = &r_opt {
                     info!("App {} exited with code: {}", &app.id.id, status.code().unwrap_or(-1));
+                    return Ok(());
                 } //else app is still running
             }
             Err(e) => {
@@ -73,8 +84,8 @@ pub async fn run_bin_main(base_dir: String,
                 break;
             }
         }
-            
-        let must_die = __get_must_die(am_must_die.clone()).await;
+
+        let must_die = utils::get_must_die(am_must_die.clone()).await;
         if must_die {
             warn!("Caught must die flag for app: {}", &app.id.id);
             break;

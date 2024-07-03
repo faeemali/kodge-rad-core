@@ -31,7 +31,7 @@ impl Workflow {
         for container in &self.apps {
             info!("Found [container type]/binary: [{}]/{}", &container.run_type, &container.bin.name);
             container.verify()?;
-            
+
             let bin_name = &container.bin.name;
             let bin = load_bin(&wf_ctx.base_dir, bin_name)?;
             bin.verify()?;
@@ -55,6 +55,7 @@ pub struct WorkflowCtx {
     pub workflow: Workflow,
     pub containers: Arc<Vec<Container>>,
     pub must_die: Arc<Mutex<bool>>,
+    pub broker_listen_port: u16,
 }
 
 impl WorkflowCtx {
@@ -63,8 +64,9 @@ impl WorkflowCtx {
         let containers = self.containers.deref();
         for container in containers {
             tokio::spawn(run_container_main(self.base_dir.to_string(),
-                                      container.clone(),
-                                      self.must_die.clone()));
+                                            container.clone(),
+                                            self.broker_listen_port,
+                                            self.must_die.clone()));
         }
 
         self.monitor_bins().await;
@@ -88,6 +90,23 @@ impl WorkflowCtx {
     }
 }
 
+fn find_broker_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send + Sync>> {
+    let pos_opt = bind_addr.find(':');
+    match pos_opt {
+        Some(pos) => {
+            if pos == (bind_addr.len() - 1) {
+                return Err(Box::new(RadError::from("Invalid format for broker bind address")));
+            }
+            let port_s = &bind_addr[pos + 1..];
+            let port = port_s.parse::<u16>()?;
+            Ok(port)
+        }
+        None => {
+            Err(Box::new(RadError::from("Unable to determine port from broker bind address")))
+        }
+    }
+}
+
 pub async fn execute_workflow(app_ctx: AppCtx,
                               workflow_id: String,
                               args: Vec<String>,
@@ -103,20 +122,22 @@ pub async fn execute_workflow(app_ctx: AppCtx,
         }
     };
 
-    tokio::spawn(broker_main(wf_dir, 
-                             app_ctx.config.broker.clone(), 
-                             stdin_chan_opt, 
+    tokio::spawn(broker_main(wf_dir,
+                             app_ctx.config.broker.clone(),
+                             stdin_chan_opt,
                              stdout_chan_opt));
-    
+
     info!("Executing workflow: {}", &workflow.id.id);
 
     let containers = workflow.apps.clone();
     let a_containers = Arc::new(containers);
 
+    let broker_listen_port = find_broker_listen_port(&app_ctx.config.broker.bind_addr)?;
     let mut wf_ctx = WorkflowCtx {
         base_dir: app_ctx.base_dir.to_string(),
         containers: a_containers,
         workflow,
+        broker_listen_port,
         must_die: app_ctx.must_die.clone(),
     };
 

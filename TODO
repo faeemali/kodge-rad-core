@@ -1,4 +1,7 @@
-- build binary container support
+- figure out how to uniquely identify apps at runtime, so if an app is
+  used more than once, it can be identified (maybe use tags)
+- for performance, consider replacing am_must_die with a channel to the control
+  plane
 - !!!(necessary?) include the workflow id in messages, to allow for inter-workflow routing
 - add apps
 - maybe add a runtime file for later termination of apps
