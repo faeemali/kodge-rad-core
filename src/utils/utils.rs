@@ -6,7 +6,7 @@ use std::sync::Arc;
 use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
    match opt {
@@ -48,13 +48,13 @@ pub fn decode_base64_byte_stream(encoded_data: &str) -> Result<Vec<u8>, DecodeEr
     BASE64_STANDARD.decode(encoded_data)
 }
 
-pub async fn get_must_die(am_must_die: Arc<Mutex<bool>>) -> bool {
-    let must_die_mg = am_must_die.lock().await;
+pub async fn get_must_die(am_must_die: Arc<RwLock<bool>>) -> bool {
+    let must_die_mg = am_must_die.read().await;
     *must_die_mg
 }
 
-pub async fn set_must_die(am_must_die: Arc<Mutex<bool>>) {
-    let mut must_die_mg = am_must_die.lock().await;
+pub async fn set_must_die(am_must_die: Arc<RwLock<bool>>) {
+    let mut must_die_mg = am_must_die.write().await;
     let must_die = must_die_mg.deref_mut();
     *must_die = true;
 }

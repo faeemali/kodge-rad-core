@@ -7,7 +7,7 @@ use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 
 use crate::{AppCtx};
@@ -18,6 +18,7 @@ use crate::broker::protocol::Message;
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
 use crate::process::run_bin_main;
+use crate::utils::utils;
 use crate::utils::utils::{get_dirs, load_yaml};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -54,7 +55,7 @@ pub struct WorkflowCtx {
     pub base_dir: String,
     pub workflow: Workflow,
     pub containers: Arc<Vec<Container>>,
-    pub must_die: Arc<Mutex<bool>>,
+    pub must_die: Arc<RwLock<bool>>,
     pub broker_listen_port: u16,
 }
 
@@ -73,13 +74,9 @@ impl WorkflowCtx {
         warn!("bins terminated");
     }
 
-    async fn must_die(&self) -> bool {
-        *self.must_die.lock().await
-    }
-
     async fn monitor_bins(&self) {
         loop {
-            if self.must_die().await {
+            if utils::get_must_die(self.must_die.clone()).await {
                 warn!("Workflow detected must_die flag. Aborting after 1s");
                 sleep(Duration::from_millis(1000)).await;
                 break;

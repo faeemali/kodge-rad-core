@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::try_join;
 use rand::random;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
@@ -129,7 +129,7 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
                                              container_id: &str,
                                              container: Container,
                                              bin_config: BinConfig,
-                                             am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                                             am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     loop {
         let join_handle = tokio::spawn(run_bin_main(base_dir.to_string(), bin_config.clone(), am_must_die.clone()));
         if let Err(e) = join_handle.await? {
@@ -166,7 +166,7 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
                                             container_id: String,
                                             to_container: Sender<Message>,
                                             from_container: Receiver<Message>,
-                                            am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                                            am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut from_container = from_container;
     let mut protocol = Protocol::new()?;
 
@@ -233,7 +233,7 @@ async fn handle_start_stop_container(base_dir: &str,
                                      container: Container,
                                      bin_config: BinConfig,
                                      broker_listen_port: u16,
-                                     am_must_die: Arc<Mutex<bool>>)
+                                     am_must_die: Arc<RwLock<bool>>)
                                      -> Result<(), Box<dyn Error + Sync + Send>> {
     if let ContainerOptions::StartStopOptions(opts) = &container.options {
         //naming is from our perspecting
@@ -351,7 +351,7 @@ async fn handle_start_stop_container(base_dir: &str,
 pub async fn run_container_main(base_dir: String,
                                 container: Container,
                                 broker_listen_port: u16,
-                                am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                                am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let bin_config = load_bin(&base_dir, &container.bin.name)?;
 
     let container_id = format!("{}-{}", chrono::Utc::now().timestamp_millis(), random::<u64>());
@@ -374,14 +374,11 @@ pub async fn run_container_main(base_dir: String,
     };
 
     if let Err(e) = res {
-        let msg = format!("Error in container {}. Aborting application", &container_id); 
+        let msg = format!("Error in container {}. Aborting application", &container_id);
         error!("{}", &msg);
         utils::set_must_die(am_must_die).await;
         return Err(Box::new(RadError::from(msg)));
     }
-    
-    Ok(())
-    
-    
 
+    Ok(())
 }

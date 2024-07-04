@@ -4,7 +4,7 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 use crate::bin::{BinConfig};
 use crate::utils::utils;
@@ -64,7 +64,7 @@ pub fn spawn_process(base_dir: &str,
 
 pub async fn run_bin_main(base_dir: String,
                           app: BinConfig,
-                          am_must_die: Arc<Mutex<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                          am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
     let mut child = spawn_process(&base_dir,
                                   &app,

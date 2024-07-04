@@ -3,12 +3,13 @@ use std::error::Error;
 use std::ops::DerefMut;
 use std::process::exit;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use log::{info, warn};
 use crate::app::{execute_app, get_all_apps};
 
 use crate::config::config::{Config, config_load};
 use crate::error::RadError;
+use crate::utils::utils::set_must_die;
 use crate::workflow::{execute_workflow, get_all_workflows, workflow_exists};
 
 mod utils;
@@ -24,7 +25,7 @@ mod app_container;
 #[derive(Clone)]
 pub struct AppCtx {
     pub base_dir: String,
-    pub must_die: Arc<Mutex<bool>>,
+    pub must_die: Arc<RwLock<bool>>,
     pub config: Config,
 }
 
@@ -112,11 +113,9 @@ async fn process_cmd(app_ctx: AppCtx, cmd_line: &[String]) -> Result<(), Box<dyn
     Ok(())
 }
 
-async fn handle_signal(am_must_die: Arc<Mutex<bool>>) {
+async fn handle_signal(am_must_die: Arc<RwLock<bool>>) {
     warn!("Caught signal. Aborting app");
-    let mut must_die_mg = am_must_die.lock().await;
-    let must_die = must_die_mg.deref_mut();
-    *must_die = true;
+    set_must_die(am_must_die).await;
 }
 
 #[tokio::main]
@@ -136,7 +135,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Application Starting");
     info!("base_dir: {}", base_dir);
 
-    let am_must_die = Arc::new(Mutex::new(false));
+    let am_must_die = Arc::new(RwLock::new(false));
 
     let app_ctx = AppCtx {
         base_dir: base_dir.to_string(),
