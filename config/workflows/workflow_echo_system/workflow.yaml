@@ -1,0 +1,13 @@
+id:
+  id: workflow_echo_system
+  name: simple echo (internal)
+  description: some generic workflow description
+apps:
+  - run_type: start_stop
+    once_options:
+    repeated_options:
+    start_stop_options:
+      redirect_msgs_to_stdin: true
+      redirect_stdout_to_msgs: true
+    bin:
+      name: echo_system

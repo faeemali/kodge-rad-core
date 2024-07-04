@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::Arc;
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::RwLock;
 use crate::broker::control::ControlMessages::{DisconnectMessage};
 use crate::broker::protocol::Message;
 use crate::broker::router::{RegisterConnectionReq, RouterControlMessages};
 use crate::broker::router::RouterControlMessages::RemoveRoutes;
+use crate::utils::utils;
 
 pub struct RegisterMessageReq {
     pub data: ControlConnData,
@@ -74,7 +77,8 @@ async fn register_connection(ctx: &mut CtrlCtx,
 }
 
 pub async fn ctrl_main(rx: Receiver<ControlMessages>,
-                       router_ctrl_tx: Sender<RouterControlMessages>) {
+                       router_ctrl_tx: Sender<RouterControlMessages>,
+                       am_must_die: Arc<RwLock<bool>>) {
     info!("Broker command receiver running");
 
     let mut ctx = CtrlCtx {
@@ -84,6 +88,11 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
 
     let mut m_rx = rx;
     loop {
+        if utils::get_must_die(am_must_die.clone()).await {
+            warn!("Control plane caught must die flag. Aborting");
+            return;
+        }
+
         let msg_opt = m_rx.recv().await;
         match msg_opt {
             Some(m) => {
@@ -98,7 +107,7 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
                     DisconnectMessage(name) => {
                         debug!("Disconnecting {} from control plane", name);
                         ctx.connections.remove(&name);
-                        
+
                         if let Err(e) = ctx.router_ctrl_tx.send(RemoveRoutes(name.clone())).await {
                             error!("Error notifying router to remove routes for: {}. Error: {}", name, &e);
                             break;
@@ -109,10 +118,9 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
             None => {
                 break;
             }
-        }
+        } //match
     }
 
     warn!("Broker receiver closed. Aborting");
-
-    /* TODO: must abort application here */
+    utils::set_must_die(am_must_die).await;
 }

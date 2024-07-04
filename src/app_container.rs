@@ -31,17 +31,15 @@ pub const RUN_TYPE_REPEATED: &str = "repeated";
 /// The app is not long-running. It must be started for each
 /// message, and it will then process the data and exit. It
 /// must be restarted for the next message, etc.
-pub const RUN_TYPE_START_STOP: &str = "start-stop";
+pub const RUN_TYPE_START_STOP: &str = "start_stop";
 
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct OnceOptions {
-    pub initial_delay: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct RepeatedOptions {
-    pub initial_delay: u64,
     pub restart_delay: u64,
 }
 
@@ -135,11 +133,11 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
         }
 
         if container.run_type == RUN_TYPE_ONCE {
-            if let Some(_) = &container.once_options {
+            return if container.once_options.is_some() {
                 error!("Run-once container aborting after app exit ({})", &container_id);
-                return Ok(());
+                Ok(())
             } else {
-                return Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")));
+                Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")))
             }
         } else if container.run_type == RUN_TYPE_REPEATED {
             if let Some(opts) = &container.repeated_options {
@@ -155,6 +153,11 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
     }
 }
 
+async fn authenticate_connection(conn: &mut TcpStream) -> Result<(), Box<dyn Error + Sync + Send>> {
+    /* TODO: finish me */
+    Ok(())
+}
+
 /// creates a loopback connection to the broker for sending/receiving
 /// messages. These messages are then passed back to the container for
 /// conversion to stdio
@@ -168,6 +171,8 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
     let mut b = [0u8; 1024];
     let mut conn = TcpStream::connect(format!("localhost:{}", broker_listen_port)).await?;
+    authenticate_connection(&mut conn).await?;
+
     loop {
         if utils::get_must_die(am_must_die.clone()).await {
             warn!("container client for container {} caught must die flag. Aborting", &container_id);
@@ -324,7 +329,7 @@ async fn handle_start_stop_container(base_dir: &str,
                         }
 
                         Err(e) => {
-                            error!("Error waiting for app to exit in container {}. Stdout output ignored. Error: {}", container_id, e);
+                            error!("Error waiting for app to exit in container {}. Stdout output ignored, but continuing. Error: {}", container_id, e);
                         }
                     }
                 }
@@ -334,7 +339,9 @@ async fn handle_start_stop_container(base_dir: &str,
                         sleep(Duration::from_millis(5)).await;
                         continue;
                     } else {
-                        error!("Chan to broker closed for container {}", container_id);
+                        let msg = format!("Chan to broker closed for container {}", container_id);
+                        error!("{}", &msg);
+                        return Err(Box::new(RadError::from(msg)));
                     }
                 }
             }
@@ -370,7 +377,7 @@ pub async fn run_container_main(base_dir: String,
     };
 
     if let Err(e) = res {
-        let msg = format!("Error in container {}. Aborting application", &container_id);
+        let msg = format!("Error in container {}. Aborting application. Error: {}", &container_id, &e);
         error!("{}", &msg);
         utils::set_must_die(am_must_die).await;
         return Err(Box::new(RadError::from(msg)));

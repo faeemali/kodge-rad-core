@@ -1,13 +1,16 @@
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
+use std::sync::{Arc};
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::io::{Interest};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::broker::auth::{authenticate, AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
@@ -17,6 +20,7 @@ use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage
 use crate::broker::protocol::{Message, Protocol};
 use crate::broker::router::router_main;
 use crate::error::RadError;
+use crate::utils::timer::Timer;
 use crate::utils::utils;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -157,6 +161,8 @@ async fn process_messages(conn_ctx: &mut ConnectionCtx,
 }
 
 struct ConnectionCtx {
+    //timer for authentication
+    pub auth_timer: Timer,
     pub auth_message: Option<AuthMessageReq>,
     pub state: States,
     pub name: Option<String>,
@@ -170,13 +176,15 @@ struct ConnectionCtx {
 async fn process_connection(sock: TcpStream,
                             addr: SocketAddr,
                             ctrl_tx: Sender<ControlMessages>,
-                            router_tx: Sender<Message>)
+                            router_tx: Sender<Message>,
+                            am_must_die: Arc<RwLock<bool>>)
                             -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("broker accepted connection from: {}", addr);
 
     let protocol = Protocol::new()?;
 
     let mut conn_ctx = ConnectionCtx {
+        auth_timer: Timer::new(Duration::from_millis(10000)),
         auth_message: None,
         state: Authenticate,
         name: None,
@@ -189,6 +197,17 @@ async fn process_connection(sock: TcpStream,
 
     let mut registered = false;
     loop {
+        if conn_ctx.auth_timer.timed_out() && conn_ctx.state == Authenticate {
+            error!("Closing connection. Authentication timeout");
+            break;
+        }
+
+        if utils::get_must_die(am_must_die.clone()).await {
+            warn!("Connection {} caught must die flag. Aborting.", utils::get_value_or_unknown(&conn_ctx.name));
+            break;
+        }
+
+
         let mut busy = false;
 
         let ready = sock.ready(Interest::WRITABLE | Interest::READABLE).await?;
@@ -306,8 +325,10 @@ async fn process_connection(sock: TcpStream,
     let name = utils::get_value_or_unknown(&conn_ctx.name);
     info!("Socket closing for {}", &name);
 
-    /* send a disconnect message to the control plane */
-    conn_ctx.ctrl_tx.send(DisconnectMessage(name)).await?;
+    if let Some(name) = &conn_ctx.name {
+        /* send a disconnect message to the control plane */
+        conn_ctx.ctrl_tx.send(DisconnectMessage(name.to_string())).await?;
+    }
 
     Ok(())
 }
@@ -316,7 +337,9 @@ async fn process_connection(sock: TcpStream,
 pub async fn broker_main(workflow_base_dir: String,
                          cfg: BrokerConfig,
                          stdin_chan_opt: Option<Receiver<Message>>,
-                         stdout_chan_opt: Option<Sender<Message>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                         stdout_chan_opt: Option<Sender<Message>>,
+                         am_must_die: Arc<RwLock<bool>>)
+                         -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
@@ -324,16 +347,40 @@ pub async fn broker_main(workflow_base_dir: String,
                              router_ctrl_rx,
                              router_conn_rx,
                              stdin_chan_opt,
-                             stdout_chan_opt));
+                             stdout_chan_opt,
+                             am_must_die.clone()));
 
     let (ctrl_tx, ctrl_rx) = channel(32);
-    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone()));
+    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone(), am_must_die.clone()));
 
     let listener = TcpListener::bind(&cfg.bind_addr).await?;
     loop {
-        let (sock, addr) = listener.accept().await?;
-        tokio::spawn(process_connection(sock, addr,
+        let mut must_sleep = false;
+        select! {
+            res = listener.accept() => {
+                if let Err(e) = &res {
+                    let msg = format!("Error accepting connection: {}. Aborting", &e);
+                    error!("{}", msg);
+                    utils::set_must_die(am_must_die.clone()).await;
+                }
+                let (sock, addr) = res.unwrap();
+                        tokio::spawn(process_connection(sock, addr,
                                         ctrl_tx.clone(), //for sending messages to the control plane
-                                        router_conn_tx.clone())); //for sending messages to the router
+                                        router_conn_tx.clone(),
+                                        am_must_die.clone())); //for sending messages to the router
+            }
+
+            must_die = utils::get_must_die(am_must_die.clone()) => {
+                if must_die {
+                    warn!("Broker caught must die flag. Aborting");
+                    return Ok(());
+                }
+                must_sleep = true;
+            }
+        } //select
+
+        if must_sleep {
+            sleep(Duration::from_millis(10)).await;
+        }
     }
 }

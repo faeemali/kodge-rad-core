@@ -122,7 +122,8 @@ pub async fn execute_workflow(app_ctx: AppCtx,
     tokio::spawn(broker_main(wf_dir,
                              app_ctx.config.broker.clone(),
                              stdin_chan_opt,
-                             stdout_chan_opt));
+                             stdout_chan_opt,
+                             app_ctx.must_die.clone()));
 
     info!("Executing workflow: {}", &workflow.id.id);
 

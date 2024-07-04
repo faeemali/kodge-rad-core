@@ -1,7 +1,9 @@
 use std::error::Error;
+use std::fmt::Debug;
 use std::fs;
 use std::io::{Read, stdin, stdout, Write};
-use log::{error, info, warn};
+use std::os::fd::{AsFd, AsRawFd};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinSet;
@@ -80,6 +82,7 @@ pub const STDOUT: &str = "stdout";
 async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>, msg_type: String) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut b = [0u8; 1024];
     loop {
+        /* TODO: how do i interrupt this? The app can't die correctly because this is a blocking read */
         let size_res = stdin().read(&mut b);
         if let Err(e) = size_res {
             let msg = format!("Error reading from stdin: {}. Aborting", &e);
@@ -135,6 +138,7 @@ async fn handle_stdout_passthrough_main(stdout_rx: Receiver<Message>, msg_type: 
         }
     }
 
+    info!("stdout passthrough terminating");
     Ok(())
 }
 
@@ -181,7 +185,7 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                 Ok(r_res) => {
                     match r_res {
                         Ok(_) => {
-                            info!("Workflow terminated without error. Aborting remaining workflows");
+                            info!("Workflow terminated. Aborting remaining workflows");
                             utils::set_must_die(app_ctx.must_die.clone()).await;
                             Ok(())
                         }
@@ -205,5 +209,5 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
         None => {
             Err(Box::new(RadError::from("Unexpected error. Got none while waiting for workflows to complete")))
         }
-    }
+    } //for
 }

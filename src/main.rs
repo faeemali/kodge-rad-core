@@ -3,8 +3,10 @@ use std::error::Error;
 use std::ops::DerefMut;
 use std::process::exit;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use log::{error, info, warn};
+use tokio::time::sleep;
 use crate::app::{execute_app, get_all_apps};
 
 use crate::config::config::{Config, config_load};
@@ -66,6 +68,7 @@ async fn run_workflow(app_ctx: AppCtx, wf_name: &str, args: Vec<String>) -> Resu
 
 async fn run_app(app_ctx: AppCtx, app: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     execute_app(app_ctx, app).await?;
+    info!("App execution completed");
     Ok(())
 }
 
@@ -145,11 +148,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let am_must_die_clone = am_must_die.clone();
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
-
+    
     if let Err(e) = process_cmd(app_ctx, &args).await {
         error!("Error running app: {}", e);
         exit(1);
     }
 
-    Ok(())
+    info!("Main app exiting");
+    
+    //exit is called here because, at the very least, reads from
+    //stdin() are blocking normal tokio exit. Just search the code for
+    //stdin().read 
+    exit(0);
 }

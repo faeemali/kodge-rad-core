@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::process::exit;
+use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -8,10 +9,12 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::app::STDOUT;
 use crate::broker::protocol::Message;
 use crate::error::RadError;
+use crate::utils::utils;
 
 /**
 The router accepts messages from all connections, then decides how best to route those
@@ -205,7 +208,8 @@ pub async fn router_main(workflow_base_dir: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>,
                          stdin_chan_opt: Option<Receiver<Message>>,
-                         stdout_chan_opt: Option<Sender<Message>>) {
+                         stdout_chan_opt: Option<Sender<Message>>,
+                         am_must_die: Arc<RwLock<bool>>) {
     let routes_res = read_config(workflow_base_dir.clone()).await;
     if let Err(e) = routes_res {
         error!("Error loading routes: {}", &e);
@@ -225,6 +229,11 @@ pub async fn router_main(workflow_base_dir: String,
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
+        if utils::get_must_die(am_must_die.clone()).await {
+            warn!("Router caught must die flag. Aborting");
+            return;
+        }
+        
         let mut busy = false;
 
         //process messages from the control plane
@@ -260,5 +269,5 @@ pub async fn router_main(workflow_base_dir: String,
     }
 
     error!("Router error detected. Aborting");
-    /* TODO: kill application here */
+    utils::set_must_die(am_must_die).await;
 }
