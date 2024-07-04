@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tokio::try_join;
 use rand::random;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -151,10 +151,10 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
 }
 
 async fn authenticate_client_connection(conn: &mut TcpStream,
-                                 container_id: &str,
-                                 container: &Container,
-                                 protocol: &mut Protocol)
-                                 -> Result<(), Box<dyn Error + Sync + Send>> {
+                                        container_id: &str,
+                                        container: &Container,
+                                        protocol: &mut Protocol)
+                                        -> Result<(), Box<dyn Error + Sync + Send>> {
     /* do simple unwraps here. Checks have already been performed */
     if let Some(opts) = &container.start_stop_options {
         /* data types from stdout */
@@ -200,7 +200,7 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
 
         /* wait for response */
         let response_timer = Timer::new(Duration::from_millis(3000));
-        let mut b = [0;1024];
+        let mut b = [0; 1024];
         while !response_timer.timed_out() {
             match conn.try_read(&mut b) {
                 Ok(size) => {
@@ -214,15 +214,15 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
                         sleep(Duration::from_millis(5)).await;
                         continue;
                     }
-                    
+
                     if msgs.len() != 1 {
                         return Err(Box::new(RadError::from(format!("auth error for container {}. Expected one message response", container_id))));
                     }
 
                     if msgs[0].header.msg_type != MSG_TYPE_AUTH_RESP {
-                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container_id))))
+                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container_id))));
                     }
-                    
+
                     let resp = serde_json::from_slice::<AuthMessageResp>(&msgs[0].body)?;
                     if resp.success {
                         debug!("Authentication successful for container {}", &container_id);
@@ -236,7 +236,7 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
                         continue;
                     } else {
                         return Err(Box::new(RadError::from(format!("Error during authentication response read: {}", &e))));
-                    }        
+                    }
                 }
             }
         } //while
@@ -355,73 +355,48 @@ async fn handle_start_stop_container(base_dir: &str,
 
             match rx_broker_to_stdio.try_recv() {
                 Ok(msg) => {
+                    //debug!("Container {} received new message", &container_id);
+
                     /* spawn a task and pass the message to stdio */
                     let mut child = spawn_process(base_dir,
                                                   &bin_config,
                                                   &opts.redirect_msgs_to_stdin,
                                                   &opts.redirect_stdout_to_msgs)?;
 
+
                     if opts.redirect_msgs_to_stdin.is_some() {
                         /* write the message contents to stdin */
-                        if let Some(stdin) = child.stdin.as_mut() {
-                            let body_as_string = String::from_utf8(msg.body.clone())?;
-                            println!("Writing to stdin: {}", &body_as_string);
+                        if let Some(ref mut stdin) = child.stdin {
                             stdin.write_all(&msg.body).await?;
-                            //stdin.flush().await?;
-                            stdin.shutdown().await?;
-                            
                         }
                     }
+
                     /*
                         else ignore the message eg.
                         if we don't care about the message contents,
                         but just want a trigger to start the app
                      */
 
-                    let mut data = vec![];
-
                     if opts.redirect_stdout_to_msgs.is_some() {
-                        /* grab stdout */
-                        if let Some(stdout) = &mut child.stdout {
-                            let mut b = [0; 1024];
-                            loop {
-                                let size = stdout.read(&mut b).await?;
-                                if size == 0 {
-                                    //eof
-                                    break;
-                                }
-
-                                data.extend_from_slice(&b[0..size]);
-                            }
+                        let output = child.wait_with_output().await?;
+                        if let Some(msg_type) = &opts.redirect_stdout_to_msgs {
+                            /* send data to router */
+                            let msg = Message {
+                                header: MessageHeader {
+                                    name: container.bin.name.clone(),
+                                    msg_type: msg_type.to_string(),
+                                    length: output.stdout.len() as u32,
+                                },
+                                body: output.stdout,
+                            };
+                            tx_stdio_to_broker.send(msg).await?;
+                            //debug!("Message sent to broker");
                         }
-                    }
-
-                    match child.wait().await {
-                        Ok(status) => {
-                            if let Some(code) = status.code() {
-                                if code == 0 {
-                                    debug!("Container {} app exited successfully. Continuing", &container_id);
-                                } else {
-                                    warn!("Container {} app exited with code {}. Stdout output will be ignored", &container_id, code);
-                                }
-                            }
-
-                            if let Some(msg_type) = &opts.redirect_stdout_to_msgs {
-                                /* send data to router */
-                                let msg = Message {
-                                    header: MessageHeader {
-                                        name: container.bin.name.clone(),
-                                        msg_type: msg_type.to_string(),
-                                        length: data.len() as u32,
-                                    },
-                                    body: data,
-                                };
-                                tx_stdio_to_broker.send(msg).await?;
-                            }
-                        }
-
-                        Err(e) => {
-                            error!("Error waiting for app to exit in container {}. Stdout output ignored, but continuing. Error: {}", container_id, e);
+                    } else {
+                        /* just wait for exit, don't capture output */
+                        if let Err(e) = child.wait().await {
+                            let msg = format!("Error waiting for app to exit in container {}. Stdout output ignored, but continuing. Error: {}", container_id, e);
+                            error!("{}", &msg);
                         }
                     }
                 }
@@ -437,7 +412,7 @@ async fn handle_start_stop_container(base_dir: &str,
                     }
                 }
             }
-        }
+        } //loop
     } else {
         Err(Box::new(RadError::from("Unexpected error: invalid options found for start-stop container")))
     }

@@ -1,3 +1,4 @@
+- check app stdio. eg. if stdout is not specified, the app does not start
 - figure out how to uniquely identify apps at runtime, so if an app is
   used more than once, it can be identified (maybe use tags)
 - for performance, consider replacing am_must_die with a channel to the control

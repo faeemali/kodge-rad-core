@@ -30,10 +30,10 @@ pub fn spawn_process(base_dir: &str,
                      capture_stdout: &Option<String>) -> Result<Child, Box<dyn Error + Sync + Send>> {
     let exec_cmd = &bin_config.execution.cmd;
     let path = if exec_cmd.starts_with('/') {
-        debug!("Executing external app: {}", exec_cmd);
+        //debug!("Executing external app: {}", exec_cmd);
         exec_cmd.to_string()
     } else {
-        debug!("Executing included app: {}", exec_cmd);
+        //debug!("Executing included app: {}", exec_cmd);
         format!("{}/cache/{}/{}", base_dir, &bin_config.id.id, exec_cmd)
     };
 
@@ -52,10 +52,14 @@ pub fn spawn_process(base_dir: &str,
 
     if capture_stdin.is_some() {
         process = process.stdin(Stdio::piped());
+    } else {
+        process = process.stdin(Stdio::null());
     }
 
     if capture_stdout.is_some() {
         process = process.stdout(Stdio::piped());
+    } else {
+        process = process.stdout(Stdio::null());
     }
 
     let child = process.spawn()?;
