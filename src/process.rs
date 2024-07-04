@@ -26,8 +26,8 @@ async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<Exit
 
 pub fn spawn_process(base_dir: &str,
                      bin_config: &BinConfig,
-                     capture_stdin: bool,
-                     capture_stdout: bool) -> Result<Child, Box<dyn Error + Sync + Send>> {
+                     capture_stdin: &Option<String>,
+                     capture_stdout: &Option<String>) -> Result<Child, Box<dyn Error + Sync + Send>> {
     let exec_cmd = &bin_config.execution.cmd;
     let path = if exec_cmd.starts_with('/') {
         debug!("Executing external app: {}", exec_cmd);
@@ -50,11 +50,11 @@ pub fn spawn_process(base_dir: &str,
         process.current_dir(working_dir);
     }
 
-    if capture_stdin {
+    if capture_stdin.is_some() {
         process = process.stdin(Stdio::piped());
     }
 
-    if capture_stdout {
+    if capture_stdout.is_some() {
         process = process.stdout(Stdio::piped());
     }
 
@@ -62,14 +62,17 @@ pub fn spawn_process(base_dir: &str,
     Ok(child)
 }
 
+/// runs the app as specified in the app configuration, but does not
+/// capture stdio. The app is monitored over its lifetime until it
+/// it terminated, or the must_die flag is set
 pub async fn run_bin_main(base_dir: String,
                           app: BinConfig,
                           am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
     let mut child = spawn_process(&base_dir,
                                   &app,
-                                  false,
-                                  false)?;
+                                  &None,
+                                  &None)?;
 
     loop {
         match __check_app_exit(&mut child, &app.id.id).await {

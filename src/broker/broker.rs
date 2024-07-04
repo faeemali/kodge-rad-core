@@ -5,19 +5,20 @@ use std::sync::{Arc};
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::io::{Interest};
+use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use crate::broker::auth::{authenticate, AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH};
+use crate::broker::auth::{authenticate};
+use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
 use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
-use crate::broker::protocol::{Message, Protocol};
+use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::broker::router::router_main;
 use crate::error::RadError;
 use crate::utils::timer::Timer;
@@ -173,7 +174,7 @@ struct ConnectionCtx {
     pub router_rx: Option<Receiver<Message>>, //for the router to send messages to the connection
 }
 
-async fn process_connection(sock: TcpStream,
+async fn process_connection(mut sock: TcpStream,
                             addr: SocketAddr,
                             ctrl_tx: Sender<ControlMessages>,
                             router_tx: Sender<Message>,
@@ -234,8 +235,23 @@ async fn process_connection(sock: TcpStream,
                     if !registered {
                         match register_connection(&mut conn_ctx, msgs.clone()).await {
                             Ok(r) => {
-                                let bytes = serde_json::to_vec(&r)?;
-                                sock.try_write(bytes.as_slice())?;
+                                let name = if let Some(n) = &conn_ctx.name {
+                                    n.to_string()
+                                } else {
+                                    return Err(Box::new(RadError::from("Unexpected error: connection is none after registration")));
+                                };
+
+                                let b = serde_json::to_vec(&r)?;
+                                let msg = Message {
+                                    header: MessageHeader {
+                                        name,
+                                        msg_type: MSG_TYPE_AUTH_RESP.to_string(),
+                                        length: b.len() as u32,
+                                    },
+                                    body: b,
+                                };
+                                let bytes = Protocol::format(&msg)?;
+                                sock.write_all(bytes.as_slice()).await?;
                                 registered = true;
                             }
                             Err(e) => {

@@ -7,7 +7,7 @@ apps:
     once_options:
     repeated_options:
     start_stop_options:
-      redirect_msgs_to_stdin: true
-      redirect_stdout_to_msgs: true
+      redirect_msgs_to_stdin: string
+      redirect_stdout_to_msgs: string
     bin:
       name: echo_system

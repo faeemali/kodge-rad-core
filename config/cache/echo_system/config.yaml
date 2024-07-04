@@ -5,6 +5,6 @@ id:
   #description is optional
   description: echoes data from the echo command on the system
 execution:
-  cmd: /bin/echo
+  cmd: /usr/bin/tail
   args: 
   working_dir:

@@ -14,9 +14,11 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
 use crate::bin::{BinConfig, load_bin};
+use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::error::RadError;
 use crate::process::{run_bin_main, spawn_process};
+use crate::utils::timer::Timer;
 use crate::utils::utils;
 
 /// Run (i.e. start) an app once only. App exit means container
@@ -35,8 +37,7 @@ pub const RUN_TYPE_START_STOP: &str = "start_stop";
 
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct OnceOptions {
-}
+pub struct OnceOptions {}
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct RepeatedOptions {
@@ -46,16 +47,12 @@ pub struct RepeatedOptions {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct StartStopOptions {
     /// messages for this app will be read from the can and passed
-    /// to stdin
-    pub redirect_msgs_to_stdin: bool,
+    /// to stdin using the specified type if Some
+    pub redirect_msgs_to_stdin: Option<String>,
 
     /// data from stdout will be converted to a message and passed
-    /// to a chan
-    pub redirect_stdout_to_msgs: bool,
-
-    /// if redirect_stdout_to_msgs is true, this must contain
-    /// the message type for the stdout message
-    pub stdout_msg_type: Option<String>,
+    /// to a chan if Some
+    pub redirect_stdout_to_msgs: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -138,7 +135,7 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
                 Ok(())
             } else {
                 Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")))
-            }
+            };
         } else if container.run_type == RUN_TYPE_REPEATED {
             if let Some(opts) = &container.repeated_options {
                 info!("Delaying for {}ms and restarting app for container: {}", opts.restart_delay, &container_id);
@@ -153,9 +150,101 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
     }
 }
 
-async fn authenticate_connection(conn: &mut TcpStream) -> Result<(), Box<dyn Error + Sync + Send>> {
-    /* TODO: finish me */
-    Ok(())
+async fn authenticate_client_connection(conn: &mut TcpStream,
+                                 container_id: &str,
+                                 container: &Container,
+                                 protocol: &mut Protocol)
+                                 -> Result<(), Box<dyn Error + Sync + Send>> {
+    /* do simple unwraps here. Checks have already been performed */
+    if let Some(opts) = &container.start_stop_options {
+        /* data types from stdout */
+        let tx_types = match &opts.redirect_stdout_to_msgs {
+            Some(t) => {
+                vec![t.to_string()]
+            }
+            None => {
+                vec![]
+            }
+        };
+
+        let rx_types = match &opts.redirect_msgs_to_stdin {
+            Some(t) => {
+                vec![t.to_string()]
+            }
+            None => {
+                vec![]
+            }
+        };
+
+        /* data types to stdin */
+        //let rx_types = if opts.
+
+        let req = AuthMessageReq {
+            name: container.bin.name.clone(),
+            tx_msg_types: tx_types,
+            rx_msg_types: rx_types,
+        };
+        let req_bytes = serde_json::to_vec(&req)?;
+
+        let auth_msg = Message {
+            header: MessageHeader {
+                name: container.bin.name.to_string(),
+                msg_type: MSG_TYPE_AUTH.to_string(),
+                length: req_bytes.len() as u32,
+            },
+            body: req_bytes,
+        };
+
+        let b = Protocol::format(&auth_msg)?;
+        conn.write_all(&b).await?;
+
+        /* wait for response */
+        let response_timer = Timer::new(Duration::from_millis(3000));
+        let mut b = [0;1024];
+        while !response_timer.timed_out() {
+            match conn.try_read(&mut b) {
+                Ok(size) => {
+                    if size == 0 {
+                        //eof
+                        break;
+                    }
+
+                    let msgs = protocol.feed(&b[0..size]);
+                    if msgs.is_empty() {
+                        sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                    
+                    if msgs.len() != 1 {
+                        return Err(Box::new(RadError::from(format!("auth error for container {}. Expected one message response", container_id))));
+                    }
+
+                    if msgs[0].header.msg_type != MSG_TYPE_AUTH_RESP {
+                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container_id))))
+                    }
+                    
+                    let resp = serde_json::from_slice::<AuthMessageResp>(&msgs[0].body)?;
+                    if resp.success {
+                        debug!("Authentication successful for container {}", &container_id);
+                        return Ok(());
+                    }
+                }
+
+                Err(e) => {
+                    if e.kind() == WouldBlock {
+                        sleep(Duration::from_millis(5)).await;
+                        continue;
+                    } else {
+                        return Err(Box::new(RadError::from(format!("Error during authentication response read: {}", &e))));
+                    }        
+                }
+            }
+        } //while
+
+        Err(Box::new(RadError::from(format!("Authentication response timeout for container {}", container_id))))
+    } else {
+        Err(Box::new(RadError::from(format!("Error authenticating client for container {}", container_id))))
+    }
 }
 
 /// creates a loopback connection to the broker for sending/receiving
@@ -163,6 +252,7 @@ async fn authenticate_connection(conn: &mut TcpStream) -> Result<(), Box<dyn Err
 /// conversion to stdio
 async fn handle_start_stop_container_client(broker_listen_port: u16,
                                             container_id: String,
+                                            container: Container,
                                             to_container: Sender<Message>,
                                             from_container: Receiver<Message>,
                                             am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -171,7 +261,7 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
     let mut b = [0u8; 1024];
     let mut conn = TcpStream::connect(format!("localhost:{}", broker_listen_port)).await?;
-    authenticate_connection(&mut conn).await?;
+    authenticate_client_connection(&mut conn, &container_id, &container, &mut protocol).await?;
 
     loop {
         if utils::get_must_die(am_must_die.clone()).await {
@@ -240,14 +330,15 @@ async fn handle_start_stop_container(base_dir: &str,
         //naming is from our perspecting
         let (tx_stdio_to_broker, rx_from_container) = tokio::sync::mpsc::channel(32);
         let (tx_from_broker, mut rx_broker_to_stdio) = tokio::sync::mpsc::channel(32);
-        let broker_listen_port_clone = broker_listen_port.clone();
 
         info!("Starting loopback stdio<->broker bridge for container {}", &container_id);
         let am_must_die_clone = am_must_die.clone();
         let container_id_clone = container_id.clone();
+        let container_clone = container.clone();
         tokio::spawn(async move {
-            let res = handle_start_stop_container_client(broker_listen_port_clone,
+            let res = handle_start_stop_container_client(broker_listen_port,
                                                          container_id_clone,
+                                                         container_clone,
                                                          tx_from_broker,
                                                          rx_from_container,
                                                          am_must_die_clone).await;
@@ -267,13 +358,18 @@ async fn handle_start_stop_container(base_dir: &str,
                     /* spawn a task and pass the message to stdio */
                     let mut child = spawn_process(base_dir,
                                                   &bin_config,
-                                                  opts.redirect_msgs_to_stdin,
-                                                  opts.redirect_stdout_to_msgs)?;
+                                                  &opts.redirect_msgs_to_stdin,
+                                                  &opts.redirect_stdout_to_msgs)?;
 
-                    if opts.redirect_msgs_to_stdin {
+                    if opts.redirect_msgs_to_stdin.is_some() {
                         /* write the message contents to stdin */
-                        if let Some(stdin) = &mut child.stdin {
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            let body_as_string = String::from_utf8(msg.body.clone())?;
+                            println!("Writing to stdin: {}", &body_as_string);
                             stdin.write_all(&msg.body).await?;
+                            //stdin.flush().await?;
+                            stdin.shutdown().await?;
+                            
                         }
                     }
                     /*
@@ -284,7 +380,7 @@ async fn handle_start_stop_container(base_dir: &str,
 
                     let mut data = vec![];
 
-                    if opts.redirect_stdout_to_msgs {
+                    if opts.redirect_stdout_to_msgs.is_some() {
                         /* grab stdout */
                         if let Some(stdout) = &mut child.stdout {
                             let mut b = [0; 1024];
@@ -310,21 +406,17 @@ async fn handle_start_stop_container(base_dir: &str,
                                 }
                             }
 
-                            if opts.redirect_stdout_to_msgs {
+                            if let Some(msg_type) = &opts.redirect_stdout_to_msgs {
                                 /* send data to router */
-                                if let Some(msg_type) = &opts.stdout_msg_type {
-                                    let msg = Message {
-                                        header: MessageHeader {
-                                            name: container.bin.name.clone(),
-                                            msg_type: msg_type.to_string(),
-                                            length: data.len() as u32,
-                                        },
-                                        body: data,
-                                    };
-                                    tx_stdio_to_broker.send(msg).await?;
-                                } else {
-                                    error!("Unable to send stdout data to router for container {}. No message type specified", container_id);
-                                }
+                                let msg = Message {
+                                    header: MessageHeader {
+                                        name: container.bin.name.clone(),
+                                        msg_type: msg_type.to_string(),
+                                        length: data.len() as u32,
+                                    },
+                                    body: data,
+                                };
+                                tx_stdio_to_broker.send(msg).await?;
                             }
                         }
 
