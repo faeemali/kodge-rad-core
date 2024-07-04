@@ -175,10 +175,6 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                                         stdout_chan));
     }
 
-    // loop {
-    //     sleep(Duration::from_millis(10)).await;
-    // }
-
     match join_set.join_next().await {
         Some(res) => {
             match res {
@@ -187,24 +183,27 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                         Ok(_) => {
                             info!("Workflow terminated without error. Aborting remaining workflows");
                             utils::set_must_die(app_ctx.must_die.clone()).await;
+                            Ok(())
                         }
                         Err(e) => {
-                            error!("Workflow aborted with error: {}. Aborting all", &e);
+                            let msg = format!("Workflow aborted with error: {}. Aborting all", &e);
+                            error!("{}", &msg);
                             utils::set_must_die(app_ctx.must_die.clone()).await;
+                            Err(Box::new(RadError::from(msg)))
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Join error detected. Aborting everything. Error: {}", &e);
+                    let msg = format!("Join error detected. Aborting everything. Error: {}", &e);
+                    error!("{}", &msg);
                     utils::set_must_die(app_ctx.must_die.clone()).await;
+                    Err(Box::new(RadError::from(msg)))
                 }
             }
         }
 
         None => {
-            return Err(Box::new(RadError::from("Unexpected error. Got none while waiting for workflows to complete")));
+            Err(Box::new(RadError::from("Unexpected error. Got none while waiting for workflows to complete")))
         }
     }
-
-    Ok(())
 }

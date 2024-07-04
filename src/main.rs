@@ -4,7 +4,7 @@ use std::ops::DerefMut;
 use std::process::exit;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use log::{info, warn};
+use log::{error, info, warn};
 use crate::app::{execute_app, get_all_apps};
 
 use crate::config::config::{Config, config_load};
@@ -146,7 +146,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let am_must_die_clone = am_must_die.clone();
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
 
-    process_cmd(app_ctx, &args).await?;
+    if let Err(e) = process_cmd(app_ctx, &args).await {
+        error!("Error running app: {}", e);
+        exit(1);
+    }
 
     Ok(())
 }

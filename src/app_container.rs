@@ -35,10 +35,13 @@ pub const RUN_TYPE_START_STOP: &str = "start-stop";
 
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct OnceOptions {}
+pub struct OnceOptions {
+    pub initial_delay: u64,
+}
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct RepeatedOptions {
+    pub initial_delay: u64,
     pub restart_delay: u64,
 }
 
@@ -55,13 +58,6 @@ pub struct StartStopOptions {
     /// if redirect_stdout_to_msgs is true, this must contain
     /// the message type for the stdout message
     pub stdout_msg_type: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub enum ContainerOptions {
-    OnceOptions(OnceOptions),
-    RepeatedOptions(RepeatedOptions),
-    StartStopOptions(StartStopOptions),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -88,7 +84,9 @@ pub struct BinOptions {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Container {
     pub run_type: String,
-    pub options: ContainerOptions,
+    pub once_options: Option<OnceOptions>,
+    pub repeated_options: Option<RepeatedOptions>,
+    pub start_stop_options: Option<StartStopOptions>,
     pub bin: BinOptions,
 }
 
@@ -96,14 +94,12 @@ impl Container {
     pub fn verify(&self) -> Result<(), Box<dyn Error + Sync + Send>> {
         match self.run_type.as_str() {
             RUN_TYPE_ONCE => {
-                if let ContainerOptions::OnceOptions(_) = self.options {
-                    Ok(())
-                } else {
-                    Err(Box::new(RadError::from("Invalid options specified for once type")))
-                }
+                /* no options here, so some or None is valid */
+                Ok(())
             }
+
             RUN_TYPE_REPEATED => {
-                if let ContainerOptions::RepeatedOptions(_) = self.options {
+                if self.repeated_options.is_some() {
                     Ok(())
                 } else {
                     Err(Box::new(RadError::from("Invalid options specified for repeated type")))
@@ -111,7 +107,7 @@ impl Container {
             }
 
             RUN_TYPE_START_STOP => {
-                if let ContainerOptions::StartStopOptions(_) = self.options {
+                if self.start_stop_options.is_some() {
                     Ok(())
                 } else {
                     Err(Box::new(RadError::from("Invalid options specified for start_stop type")))
@@ -139,21 +135,21 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
         }
 
         if container.run_type == RUN_TYPE_ONCE {
-            if let ContainerOptions::OnceOptions(_) = &container.options {
+            if let Some(_) = &container.once_options {
                 error!("Run-once container aborting after app exit ({})", &container_id);
                 return Ok(());
             } else {
                 return Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")));
             }
         } else if container.run_type == RUN_TYPE_REPEATED {
-            if let ContainerOptions::RepeatedOptions(opts) = &container.options {
+            if let Some(opts) = &container.repeated_options {
                 info!("Delaying for {}ms and restarting app for container: {}", opts.restart_delay, &container_id);
                 sleep(Duration::from_millis(opts.restart_delay)).await;
                 continue;
             } else {
                 return Err(Box::new(RadError::from("Unexpected error: invalid options found for repeated container")));
             }
-        } else if container.run_type == RUN_TYPE_START_STOP {} else {
+        } else {
             return Err(Box::new(RadError::from(format!("Invalid run type detected. Don't know what to do after app exit. Run-type: {}", &container.run_type))));
         }
     }
@@ -235,7 +231,7 @@ async fn handle_start_stop_container(base_dir: &str,
                                      broker_listen_port: u16,
                                      am_must_die: Arc<RwLock<bool>>)
                                      -> Result<(), Box<dyn Error + Sync + Send>> {
-    if let ContainerOptions::StartStopOptions(opts) = &container.options {
+    if let Some(opts) = &container.start_stop_options {
         //naming is from our perspecting
         let (tx_stdio_to_broker, rx_from_container) = tokio::sync::mpsc::channel(32);
         let (tx_from_broker, mut rx_broker_to_stdio) = tokio::sync::mpsc::channel(32);
