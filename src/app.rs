@@ -30,8 +30,8 @@ pub struct AppWorkflowItem {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppStdio {
-    pub stdin: StdioItem,
-    pub stdout: StdioItem,
+    pub stdin: Option<StdioItem>,
+    pub stdout: Option<StdioItem>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -155,19 +155,27 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
 
     for wf in app.workflows {
         /* handle stdin passthrough */
-        let stdin_chan = if wf.name == app.stdio.stdin.workflow {
-            let (stdin_tx, stdin_rx) = channel(32);
-            join_set.spawn(handle_stdin_passthrough_main(stdin_tx, app.stdio.stdin.msg_type.clone()));
-            Some(stdin_rx)
+        let stdin_chan = if let Some(stdin) = &app.stdio.stdin {
+            if wf.name == stdin.workflow {
+                let (stdin_tx, stdin_rx) = channel(32);
+                join_set.spawn(handle_stdin_passthrough_main(stdin_tx, stdin.msg_type.clone()));
+                Some(stdin_rx)
+            } else {
+                None
+            }
         } else {
             None
         };
 
         /* handle stdout passthrough */
-        let stdout_chan = if wf.name == app.stdio.stdout.workflow {
-            let (stdout_tx, stdout_rx) = channel(32);
-            join_set.spawn(handle_stdout_passthrough_main(stdout_rx, app.stdio.stdout.msg_type.clone()));
-            Some(stdout_tx)
+        let stdout_chan = if let Some(stdout) = &app.stdio.stdout {
+            if wf.name == stdout.workflow {
+                let (stdout_tx, stdout_rx) = channel(32);                
+                join_set.spawn(handle_stdout_passthrough_main(stdout_rx, stdout.msg_type.clone()));
+                Some(stdout_tx)
+            } else {
+                None
+            }
         } else {
             None
         };
