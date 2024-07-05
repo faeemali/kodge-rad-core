@@ -7,7 +7,7 @@ use log::{error, info, warn};
 use crate::app::{execute_app, get_all_apps};
 
 use crate::config::config::{Config, config_load};
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::utils::utils::set_must_die;
 use crate::workflow::{execute_workflow, get_all_workflows, workflow_exists};
 
@@ -57,7 +57,7 @@ fn list_apps(app_ctx: &AppCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
 /// Run a workflow that's not linked to stdin or stdout (an app is required for that)
 async fn run_workflow(app_ctx: AppCtx, wf_name: &str, args: Vec<String>) -> Result<(), Box<dyn Error + Sync + Send>> {
     if !workflow_exists(&app_ctx.base_dir, wf_name)? {
-        return Err(Box::new(RadError::from("App not found")));
+        return raderr("App not found");
     }
     execute_workflow(app_ctx, wf_name.to_string(), args, None, None).await?;
     Ok(())
@@ -145,16 +145,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let am_must_die_clone = am_must_die.clone();
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
-    
+
     if let Err(e) = process_cmd(app_ctx, &args).await {
         error!("Error running app: {}", e);
         exit(1);
     }
 
     info!("Main app exiting");
-    
+
     //exit is called here because, at the very least, reads from
     //stdin() are blocking normal tokio exit. Just search the code for
-    //stdin().read 
+    //stdin().read
     exit(0);
 }

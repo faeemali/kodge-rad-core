@@ -1,16 +1,14 @@
 use std::error::Error;
-use std::fmt::Debug;
 use std::fs;
 use std::io::{Read, stdin, stdout, Write};
-use std::os::fd::{AsFd, AsRawFd};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinSet;
 use crate::AppCtx;
 use crate::broker::protocol::{Message, MessageHeader};
 use crate::config::config_common::ConfigId;
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::utils::utils;
 use crate::utils::utils::load_yaml;
 use crate::workflow::execute_workflow;
@@ -87,7 +85,7 @@ async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>, msg_type: Stri
         if let Err(e) = size_res {
             let msg = format!("Error reading from stdin: {}. Aborting", &e);
             error!("{}", &msg);
-            return Err(Box::new(RadError::from(msg)));
+            return raderr(msg);
         }
 
         let size = size_res.unwrap();
@@ -133,7 +131,7 @@ async fn handle_stdout_passthrough_main(stdout_rx: Receiver<Message>, msg_type: 
             Err(e) => {
                 let msg = format!("stdout tx error: {}", &e);
                 error!("{}", &msg);
-                return Err(Box::new(RadError::from(msg)));
+                return raderr(msg);
             }
         }
     }
@@ -146,7 +144,7 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
     let app = match find_app_by_id(&app_ctx.base_dir, app_id)? {
         Some(a) => { a }
         None => {
-            return Err(Box::new(RadError::from(format!("Application not found: {}", app_id))));
+            return raderr(format!("Application not found: {}", app_id));
         }
     };
 
@@ -170,7 +168,7 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
         /* handle stdout passthrough */
         let stdout_chan = if let Some(stdout) = &app.stdio.stdout {
             if wf.name == stdout.workflow {
-                let (stdout_tx, stdout_rx) = channel(32);                
+                let (stdout_tx, stdout_rx) = channel(32);
                 join_set.spawn(handle_stdout_passthrough_main(stdout_rx, stdout.msg_type.clone()));
                 Some(stdout_tx)
             } else {
@@ -201,7 +199,7 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                             let msg = format!("Workflow aborted with error: {}. Aborting all", &e);
                             error!("{}", &msg);
                             utils::set_must_die(app_ctx.must_die.clone()).await;
-                            Err(Box::new(RadError::from(msg)))
+                            raderr(msg)
                         }
                     }
                 }
@@ -209,13 +207,13 @@ pub async fn execute_app(app_ctx: AppCtx, app_id: &str) -> Result<(), Box<dyn Er
                     let msg = format!("Join error detected. Aborting everything. Error: {}", &e);
                     error!("{}", &msg);
                     utils::set_must_die(app_ctx.must_die.clone()).await;
-                    Err(Box::new(RadError::from(msg)))
+                    raderr(msg)
                 }
             }
         }
 
         None => {
-            Err(Box::new(RadError::from("Unexpected error. Got none while waiting for workflows to complete")))
+            raderr("Unexpected error. Got none while waiting for workflows to complete")
         }
     } //for
 }

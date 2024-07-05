@@ -17,7 +17,7 @@ use crate::bin::{load_bin};
 use crate::broker::broker::{broker_main};
 use crate::broker::protocol::Message;
 use crate::config::config_common::ConfigId;
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::utils::utils;
 use crate::utils::utils::{get_dirs, load_yaml};
 
@@ -37,12 +37,12 @@ impl Workflow {
             container.verify()?;
 
             if !utils::is_valid_name(&container.name) {
-                return Err(Box::new(RadError::from(format!("Invalid container name: {}", &container.name))));
+                return raderr(format!("Invalid container name: {}", &container.name));
             }
 
             let val = container_name_map.get(&container.name);
             if val.is_some() {
-                return Err(Box::new(RadError::from(format!("Duplicate container name detected: {}", &container.name))));
+                return raderr(format!("Duplicate container name detected: {}", &container.name));
             }
             container_name_map.insert(container.name.clone(), container.name.clone());
 
@@ -105,14 +105,14 @@ fn find_broker_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send 
     match pos_opt {
         Some(pos) => {
             if pos == (bind_addr.len() - 1) {
-                return Err(Box::new(RadError::from("Invalid format for broker bind address")));
+                return raderr("Invalid format for broker bind address");
             }
             let port_s = &bind_addr[pos + 1..];
             let port = port_s.parse::<u16>()?;
             Ok(port)
         }
         None => {
-            Err(Box::new(RadError::from("Unable to determine port from broker bind address")))
+            raderr("Unable to determine port from broker bind address")
         }
     }
 }
@@ -130,7 +130,7 @@ pub async fn execute_workflow(app_ctx: AppCtx,
             wf_dir
         }
         None => {
-            return Err(Box::new(RadError::from(format!("Workflow with id: {} does not exist", &workflow_id))));
+            return raderr(format!("Workflow with id: {} does not exist", &workflow_id));
         }
     };
 
@@ -139,7 +139,7 @@ pub async fn execute_workflow(app_ctx: AppCtx,
                              stdin_chan_opt,
                              stdout_chan_opt,
                              app_ctx.must_die.clone()));
-    
+
     let containers = workflow.apps.clone();
     let a_containers = Arc::new(containers);
 

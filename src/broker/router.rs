@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::app::STDOUT;
 use crate::broker::protocol::Message;
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::utils::utils;
 
 /**
@@ -181,7 +181,7 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>,
             if e == TryRecvError::Disconnected {
                 let msg = "Router connection disconnect detected. Aborting";
                 error!("{}", msg);
-                return Err(Box::new(RadError::from(msg)));
+                return raderr(msg);
             }
         }
     }
@@ -195,7 +195,7 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>,
                 if e == TryRecvError::Disconnected {
                     let msg = "Router stdin disconnect detected. Aborting";
                     error!("{}", msg);
-                    return Err(Box::new(RadError::from(msg)));
+                    return raderr(msg);
                 }
             }
         }
@@ -233,7 +233,7 @@ pub async fn router_main(workflow_base_dir: String,
             warn!("Router caught must die flag. Aborting");
             return;
         }
-        
+
         let mut busy = false;
 
         //process messages from the control plane

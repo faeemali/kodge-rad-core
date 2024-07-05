@@ -14,6 +14,10 @@ impl RadError {
     }
 }
 
+pub fn raderr<S, T: AsRef<str>>(msg: T) -> Result<S, Box<dyn Error + Sync + Send>> {
+    Err(Box::new(RadError::from(msg.as_ref())))
+}
+
 impl Error for RadError {
 }
 
@@ -43,4 +47,5 @@ impl Display for RadError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "RadError: [{}]", &self.message)
     }
+
 }

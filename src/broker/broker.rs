@@ -20,7 +20,7 @@ use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, Regist
 use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::broker::router::router_main;
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::utils::timer::Timer;
 use crate::utils::utils;
 
@@ -65,18 +65,18 @@ async fn __get_control_message(conn_ctx: &mut ConnectionCtx) -> Result<Actions, 
 
         Ok(NoAction)
     } else {
-        Err(Box::new(RadError::from("Unexpected error. ctrl_rx is None")))
+        raderr("Unexpected error. ctrl_rx is None")
     }
 }
 
 async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -> Result<(), Box<dyn Error + Sync + Send>> {
     if msgs.len() != 1 {
-        return Err(Box::new(RadError::from("Invalid number of messages for authentication")));
+        return raderr("Invalid number of messages for authentication");
     }
 
     let auth_msg_wrapper = &msgs[0];
     if auth_msg_wrapper.header.msg_type != MSG_TYPE_AUTH {
-        return Err(Box::new(RadError::from("Invalid message for authentication")));
+        return raderr("Invalid message for authentication");
     }
 
     let auth_msg = serde_json::from_slice::<AuthMessageReq>(auth_msg_wrapper.body.as_slice())?;
@@ -86,7 +86,7 @@ async fn __authenticate_client(conn_ctx: &mut ConnectionCtx, msgs: &[Message]) -
         conn_ctx.state = Register;
         Ok(())
     } else {
-        Err(Box::new(RadError::from("Authentication error")))
+        raderr("Authentication error")
     }
 }
 
@@ -118,7 +118,7 @@ async fn __register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn E
 
         Ok(())
     } else {
-        Err(Box::new(RadError::from("Failed to get register details (unexpected)")))
+        raderr("Failed to get register details (unexpected)")
     }
 }
 
@@ -238,7 +238,7 @@ async fn process_connection(mut sock: TcpStream,
                                 let name = if let Some(n) = &conn_ctx.name {
                                     n.to_string()
                                 } else {
-                                    return Err(Box::new(RadError::from("Unexpected error: connection is none after registration")));
+                                    return raderr("Unexpected error: connection is none after registration");
                                 };
 
                                 let b = serde_json::to_vec(&r)?;

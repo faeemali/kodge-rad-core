@@ -5,7 +5,6 @@ use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock};
-use rand::random;
 use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -14,7 +13,7 @@ use tokio::time::sleep;
 use crate::bin::{BinConfig, load_bin};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
-use crate::error::RadError;
+use crate::error::{raderr};
 use crate::process::{run_bin_main, spawn_process};
 use crate::utils::timer::Timer;
 use crate::utils::utils;
@@ -88,9 +87,9 @@ pub struct Container {
 impl Container {
     pub fn verify(&self) -> Result<(), Box<dyn Error + Sync + Send>> {
         if !utils::is_valid_name(&self.name) {
-            return Err(Box::new(RadError::from(format!("Invalid name for container. Name={}", &self.name))));    
+            return raderr(format!("Invalid name for container. Name={}", &self.name));
         }
-        
+
         match self.run_type.as_str() {
             RUN_TYPE_ONCE => {
                 /* no options here, so some or None is valid */
@@ -101,7 +100,7 @@ impl Container {
                 if self.repeated_options.is_some() {
                     Ok(())
                 } else {
-                    Err(Box::new(RadError::from("Invalid options specified for repeated type")))
+                    raderr("Invalid options specified for repeated type")
                 }
             }
 
@@ -109,12 +108,12 @@ impl Container {
                 if self.start_stop_options.is_some() {
                     Ok(())
                 } else {
-                    Err(Box::new(RadError::from("Invalid options specified for start_stop type")))
+                    raderr("Invalid options specified for start_stop type")
                 }
             }
 
             _ => {
-                Err(Box::new(RadError::from(format!("Invalid run type specified for container. Type: {}", &self.run_type))))
+                raderr(format!("Invalid run type specified for container. Type: {}", &self.run_type))
             }
         }
     }
@@ -137,7 +136,7 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
                 error!("Run-once container aborting after app exit ({})", &container.name);
                 Ok(())
             } else {
-                Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")))
+                raderr("Unexpected error: invalid options found for run-once container")
             };
         } else if container.run_type == RUN_TYPE_REPEATED {
             if let Some(opts) = &container.repeated_options {
@@ -145,10 +144,10 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
                 sleep(Duration::from_millis(opts.restart_delay)).await;
                 continue;
             } else {
-                return Err(Box::new(RadError::from("Unexpected error: invalid options found for repeated container")));
+                return raderr("Unexpected error: invalid options found for repeated container");
             }
         } else {
-            return Err(Box::new(RadError::from(format!("Invalid run type detected. Don't know what to do after app exit. Run-type: {}", &container.run_type))));
+            return raderr(format!("Invalid run type detected. Don't know what to do after app exit. Run-type: {}", &container.run_type));
         }
     }
 }
@@ -218,11 +217,11 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
                     }
 
                     if msgs.len() != 1 {
-                        return Err(Box::new(RadError::from(format!("auth error for container {}. Expected one message response", &container.name))));
+                        return raderr(format!("auth error for container {}. Expected one message response", &container.name));
                     }
 
                     if msgs[0].header.msg_type != MSG_TYPE_AUTH_RESP {
-                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container.name))));
+                        return raderr(format!("Invalid message response type to authentication request for container {}", &container.name));
                     }
 
                     let resp = serde_json::from_slice::<AuthMessageResp>(&msgs[0].body)?;
@@ -237,15 +236,15 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
                         sleep(Duration::from_millis(5)).await;
                         continue;
                     } else {
-                        return Err(Box::new(RadError::from(format!("Error during authentication response read: {}", &e))));
+                        return raderr(format!("Error during authentication response read: {}", &e));
                     }
                 }
             }
         } //while
 
-        Err(Box::new(RadError::from(format!("Authentication response timeout for container {}", &container.name))))
+        raderr(format!("Authentication response timeout for container {}", &container.name))
     } else {
-        Err(Box::new(RadError::from(format!("Error authenticating client for container {}", &container.name))))
+        raderr(format!("Error authenticating client for container {}", &container.name))
     }
 }
 
@@ -406,13 +405,13 @@ async fn handle_start_stop_container(base_dir: &str,
                     } else {
                         let msg = format!("Chan to broker closed for container {}", &container.name);
                         error!("{}", &msg);
-                        return Err(Box::new(RadError::from(msg)));
+                        return raderr(msg);
                     }
                 }
             }
         } //loop
     } else {
-        Err(Box::new(RadError::from("Unexpected error: invalid options found for start-stop container")))
+        raderr("Unexpected error: invalid options found for start-stop container")
     }
 }
 
@@ -440,14 +439,14 @@ pub async fn run_container_main(base_dir: String,
                                     broker_listen_port,
                                     am_must_die.clone()).await
     } else {
-        return Err(Box::new(RadError::from(format!("Invalid container type ({}) detected", &container.run_type))));
+        return raderr(format!("Invalid container type ({}) detected", &container.run_type));
     };
 
     if let Err(e) = res {
         let msg = format!("Error in container {}. Aborting application. Error: {}", &container_name, &e);
         error!("{}", &msg);
         utils::set_must_die(am_must_die).await;
-        return Err(Box::new(RadError::from(msg)));
+        return raderr(msg);
     }
 
     Ok(())

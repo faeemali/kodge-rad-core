@@ -4,7 +4,7 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock};
 use tokio::time::sleep;
 use crate::bin::{BinConfig};
 use crate::utils::utils;
