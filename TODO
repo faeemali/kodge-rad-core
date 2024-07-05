@@ -1,5 +1,3 @@
-- figure out how to uniquely identify apps at runtime, so if an app is
-  used more than once, it can be identified (maybe use tags)
 - !!!(necessary?) include the workflow id in messages, to allow for inter-workflow routing
 - add apps
 - maybe add a runtime file for later termination of apps
