@@ -6,6 +6,7 @@ use crate::broker::protocol::States::{GetBody, GetCrc, GetFooter, GetHeader, Get
 use crate::error::RadError;
 use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
+use crate::utils::utils;
 
 /**
 Message format is:
@@ -80,39 +81,7 @@ impl Protocol {
         self.calculated_crc = 0xFFFF;
         self.state = GetHeader;
     }
-
-    fn is_valid_msg_type_char(c: char) -> bool {
-        c.is_alphanumeric() || c == '-' || c == '_'
-    }
-
-    fn is_valid_msg_type(&self, msg_type: &str) -> bool {
-        if msg_type.is_empty() {
-            return false;
-        }
-
-        for b in msg_type.as_bytes() {
-            if !Self::is_valid_msg_type_char(*b as char) {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    fn is_valid_name(&self, name: &str) -> bool {
-        if name.is_empty() {
-            return false;
-        }
-
-        for b in name.as_bytes() {
-            if !Self::is_valid_msg_type_char(*b as char) {
-                return false;
-            }
-        }
-
-        true
-    }
-
+    
     pub fn feed(&mut self, data: &[u8]) -> Vec<Message> {
         let mut ret = vec![];
         for b in data {
@@ -149,7 +118,7 @@ impl Protocol {
                         }
 
                         let msg_header = msg_header_res.unwrap();
-                        if !self.is_valid_name(&msg_header.name) || !self.is_valid_msg_type(&msg_header.msg_type) {
+                        if !utils::is_valid_name(&msg_header.name) || !utils::is_valid_msg_type(&msg_header.msg_type) {
                             debug!("Invalid message name or type (protocol)");
                             self.reset();
                             continue;

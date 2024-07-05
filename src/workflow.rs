@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::ops::{Deref};
 use std::path::Path;
@@ -7,17 +8,16 @@ use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock};
 use tokio::time::sleep;
 
 use crate::{AppCtx};
 use crate::app_container::{Container, run_container_main};
-use crate::bin::{BinConfig, load_bin};
+use crate::bin::{load_bin};
 use crate::broker::broker::{broker_main};
 use crate::broker::protocol::Message;
 use crate::config::config_common::ConfigId;
 use crate::error::RadError;
-use crate::process::run_bin_main;
 use crate::utils::utils;
 use crate::utils::utils::{get_dirs, load_yaml};
 
@@ -29,9 +29,22 @@ pub struct Workflow {
 
 impl Workflow {
     fn verify_apps(&self, wf_ctx: &WorkflowCtx) -> Result<(), Box<dyn Error + Sync + Send>> {
+        //use the hashmap to determine if a container name is duplicated
+        let mut container_name_map = HashMap::new();
+
         for container in &self.apps {
-            info!("Found [container type]/binary: [{}]/{}", &container.run_type, &container.bin.name);
+            info!("Found (container name)/[container type]/binary: ({})/[{}]/{}", &container.name, &container.run_type, &container.bin.name);
             container.verify()?;
+
+            if !utils::is_valid_name(&container.name) {
+                return Err(Box::new(RadError::from(format!("Invalid container name: {}", &container.name))));
+            }
+
+            let val = container_name_map.get(&container.name);
+            if val.is_some() {
+                return Err(Box::new(RadError::from(format!("Duplicate container name detected: {}", &container.name))));
+            }
+            container_name_map.insert(container.name.clone(), container.name.clone());
 
             let bin_name = &container.bin.name;
             let bin = load_bin(&wf_ctx.base_dir, bin_name)?;
@@ -110,6 +123,8 @@ pub async fn execute_workflow(app_ctx: AppCtx,
                               stdin_chan_opt: Option<Receiver<Message>>,
                               stdout_chan_opt: Option<Sender<Message>>)
                               -> Result<(), Box<dyn Error + Sync + Send>> {
+    info!("Executing workflow: {}", &workflow_id);
+
     let (workflow, wf_dir) = match find_workflow_by_id(&app_ctx.base_dir, &workflow_id)? {
         Some(wf_dir) => {
             wf_dir
@@ -124,9 +139,7 @@ pub async fn execute_workflow(app_ctx: AppCtx,
                              stdin_chan_opt,
                              stdout_chan_opt,
                              app_ctx.must_die.clone()));
-
-    info!("Executing workflow: {}", &workflow.id.id);
-
+    
     let containers = workflow.apps.clone();
     let a_containers = Arc::new(containers);
 
@@ -169,7 +182,7 @@ pub fn get_all_workflows(base_dir: &str) -> Result<Vec<(Workflow, String)>, Box<
 
 pub fn find_workflow_by_id(base_dir: &str, wf_id: &str) -> Result<Option<(Workflow, String)>, Box<dyn Error + Sync + Send>> {
     let workflows = get_all_workflows(base_dir)?;
-    Ok(workflows.iter().find(|(wf, dir)| wf.id.id.eq(wf_id)).cloned())
+    Ok(workflows.iter().find(|(wf, _dir)| wf.id.id.eq(wf_id)).cloned())
 }
 
 pub fn workflow_exists(base_dir: &str, wf_id: &str) -> Result<bool, Box<dyn Error + Sync + Send>> {

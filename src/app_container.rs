@@ -1,14 +1,12 @@
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
-use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
-use tokio::try_join;
+use tokio::sync::{RwLock};
 use rand::random;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, Interest};
+use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -78,6 +76,8 @@ pub struct BinOptions {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Container {
+    //a unique name for this container. No 2 containers may share a name
+    pub name: String,
     pub run_type: String,
     pub once_options: Option<OnceOptions>,
     pub repeated_options: Option<RepeatedOptions>,
@@ -87,6 +87,10 @@ pub struct Container {
 
 impl Container {
     pub fn verify(&self) -> Result<(), Box<dyn Error + Sync + Send>> {
+        if !utils::is_valid_name(&self.name) {
+            return Err(Box::new(RadError::from(format!("Invalid name for container. Name={}", &self.name))));    
+        }
+        
         match self.run_type.as_str() {
             RUN_TYPE_ONCE => {
                 /* no options here, so some or None is valid */
@@ -117,28 +121,27 @@ impl Container {
 }
 
 async fn handle_once_and_repeated_containers(base_dir: &str,
-                                             container_id: &str,
                                              container: Container,
                                              bin_config: BinConfig,
                                              am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     loop {
         let join_handle = tokio::spawn(run_bin_main(base_dir.to_string(), bin_config.clone(), am_must_die.clone()));
         if let Err(e) = join_handle.await? {
-            error!("Error running bin: {:?} for container: {}", e, &container_id);
+            error!("Error running bin: {:?} for container: {}", e, &container.name);
         } else {
-            info!("App exited successfully for container: {}", &container_id);
+            info!("App exited successfully for container: {}", &container.name);
         }
 
         if container.run_type == RUN_TYPE_ONCE {
             return if container.once_options.is_some() {
-                error!("Run-once container aborting after app exit ({})", &container_id);
+                error!("Run-once container aborting after app exit ({})", &container.name);
                 Ok(())
             } else {
                 Err(Box::new(RadError::from("Unexpected error: invalid options found for run-once container")))
             };
         } else if container.run_type == RUN_TYPE_REPEATED {
             if let Some(opts) = &container.repeated_options {
-                info!("Delaying for {}ms and restarting app for container: {}", opts.restart_delay, &container_id);
+                info!("Delaying for {}ms and restarting app for container: {}", opts.restart_delay, &container.name);
                 sleep(Duration::from_millis(opts.restart_delay)).await;
                 continue;
             } else {
@@ -151,7 +154,6 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
 }
 
 async fn authenticate_client_connection(conn: &mut TcpStream,
-                                        container_id: &str,
                                         container: &Container,
                                         protocol: &mut Protocol)
                                         -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -180,7 +182,7 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
         //let rx_types = if opts.
 
         let req = AuthMessageReq {
-            name: container.bin.name.clone(),
+            name: container.name.clone(),
             tx_msg_types: tx_types,
             rx_msg_types: rx_types,
         };
@@ -188,7 +190,7 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
 
         let auth_msg = Message {
             header: MessageHeader {
-                name: container.bin.name.to_string(),
+                name: container.name.to_string(),
                 msg_type: MSG_TYPE_AUTH.to_string(),
                 length: req_bytes.len() as u32,
             },
@@ -216,16 +218,16 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
                     }
 
                     if msgs.len() != 1 {
-                        return Err(Box::new(RadError::from(format!("auth error for container {}. Expected one message response", container_id))));
+                        return Err(Box::new(RadError::from(format!("auth error for container {}. Expected one message response", &container.name))));
                     }
 
                     if msgs[0].header.msg_type != MSG_TYPE_AUTH_RESP {
-                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container_id))));
+                        return Err(Box::new(RadError::from(format!("Invalid message response type to authentication request for container {}", &container.name))));
                     }
 
                     let resp = serde_json::from_slice::<AuthMessageResp>(&msgs[0].body)?;
                     if resp.success {
-                        debug!("Authentication successful for container {}", &container_id);
+                        debug!("Authentication successful for container {}", &container.name);
                         return Ok(());
                     }
                 }
@@ -241,9 +243,9 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
             }
         } //while
 
-        Err(Box::new(RadError::from(format!("Authentication response timeout for container {}", container_id))))
+        Err(Box::new(RadError::from(format!("Authentication response timeout for container {}", &container.name))))
     } else {
-        Err(Box::new(RadError::from(format!("Error authenticating client for container {}", container_id))))
+        Err(Box::new(RadError::from(format!("Error authenticating client for container {}", &container.name))))
     }
 }
 
@@ -251,7 +253,6 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
 /// messages. These messages are then passed back to the container for
 /// conversion to stdio
 async fn handle_start_stop_container_client(broker_listen_port: u16,
-                                            container_id: String,
                                             container: Container,
                                             to_container: Sender<Message>,
                                             from_container: Receiver<Message>,
@@ -261,11 +262,11 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
     let mut b = [0u8; 1024];
     let mut conn = TcpStream::connect(format!("localhost:{}", broker_listen_port)).await?;
-    authenticate_client_connection(&mut conn, &container_id, &container, &mut protocol).await?;
+    authenticate_client_connection(&mut conn, &container, &mut protocol).await?;
 
     loop {
         if utils::get_must_die(am_must_die.clone()).await {
-            warn!("container client for container {} caught must die flag. Aborting", &container_id);
+            warn!("container client for container {} caught must die flag. Aborting", &container.name);
             return Ok(());
         }
 
@@ -320,7 +321,6 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
 
 async fn handle_start_stop_container(base_dir: &str,
-                                     container_id: String,
                                      container: Container,
                                      bin_config: BinConfig,
                                      broker_listen_port: u16,
@@ -331,13 +331,11 @@ async fn handle_start_stop_container(base_dir: &str,
         let (tx_stdio_to_broker, rx_from_container) = tokio::sync::mpsc::channel(32);
         let (tx_from_broker, mut rx_broker_to_stdio) = tokio::sync::mpsc::channel(32);
 
-        info!("Starting loopback stdio<->broker bridge for container {}", &container_id);
+        info!("Starting loopback stdio<->broker bridge for container {}", &container.name);
         let am_must_die_clone = am_must_die.clone();
-        let container_id_clone = container_id.clone();
         let container_clone = container.clone();
         tokio::spawn(async move {
             let res = handle_start_stop_container_client(broker_listen_port,
-                                                         container_id_clone,
                                                          container_clone,
                                                          tx_from_broker,
                                                          rx_from_container,
@@ -349,7 +347,7 @@ async fn handle_start_stop_container(base_dir: &str,
 
         loop {
             if utils::get_must_die(am_must_die.clone()).await {
-                warn!("Container {} caught must_die flag. Aborting", container_id);
+                warn!("Container {} caught must_die flag. Aborting", &container.name);
                 return Ok(());
             }
 
@@ -383,7 +381,7 @@ async fn handle_start_stop_container(base_dir: &str,
                             /* send data to router */
                             let msg = Message {
                                 header: MessageHeader {
-                                    name: container.bin.name.clone(),
+                                    name: container.name.clone(),
                                     msg_type: msg_type.to_string(),
                                     length: output.stdout.len() as u32,
                                 },
@@ -395,7 +393,7 @@ async fn handle_start_stop_container(base_dir: &str,
                     } else {
                         /* just wait for exit, don't capture output */
                         if let Err(e) = child.wait().await {
-                            let msg = format!("Error waiting for app to exit in container {}. Stdout output ignored, but continuing. Error: {}", container_id, e);
+                            let msg = format!("Error waiting for app to exit in container {}. Stdout output ignored, but continuing. Error: {}", &container.name, e);
                             error!("{}", &msg);
                         }
                     }
@@ -406,7 +404,7 @@ async fn handle_start_stop_container(base_dir: &str,
                         sleep(Duration::from_millis(5)).await;
                         continue;
                     } else {
-                        let msg = format!("Chan to broker closed for container {}", container_id);
+                        let msg = format!("Chan to broker closed for container {}", &container.name);
                         error!("{}", &msg);
                         return Err(Box::new(RadError::from(msg)));
                     }
@@ -424,17 +422,19 @@ pub async fn run_container_main(base_dir: String,
                                 am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
     let bin_config = load_bin(&base_dir, &container.bin.name)?;
 
-    let container_id = format!("{}-{}", chrono::Utc::now().timestamp_millis(), random::<u64>());
     info!("Running container {} ({}) for app: {}",
-        &container_id,
+        &container.name,
         &container.run_type,
         &container.bin.name);
 
+    let container_name = container.name.clone();
     let res = if container.run_type == RUN_TYPE_ONCE || container.run_type == RUN_TYPE_REPEATED {
-        handle_once_and_repeated_containers(&base_dir, &container_id, container, bin_config, am_must_die.clone()).await
+        handle_once_and_repeated_containers(&base_dir,
+                                            container,
+                                            bin_config,
+                                            am_must_die.clone()).await
     } else if container.run_type == RUN_TYPE_START_STOP {
         handle_start_stop_container(&base_dir,
-                                    container_id.clone(),
                                     container,
                                     bin_config,
                                     broker_listen_port,
@@ -444,7 +444,7 @@ pub async fn run_container_main(base_dir: String,
     };
 
     if let Err(e) = res {
-        let msg = format!("Error in container {}. Aborting application. Error: {}", &container_id, &e);
+        let msg = format!("Error in container {}. Aborting application. Error: {}", &container_name, &e);
         error!("{}", &msg);
         utils::set_must_die(am_must_die).await;
         return Err(Box::new(RadError::from(msg)));

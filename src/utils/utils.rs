@@ -6,7 +6,7 @@ use std::sync::Arc;
 use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
    match opt {
@@ -57,4 +57,36 @@ pub async fn set_must_die(am_must_die: Arc<RwLock<bool>>) {
     let mut must_die_mg = am_must_die.write().await;
     let must_die = must_die_mg.deref_mut();
     *must_die = true;
+}
+
+pub fn is_valid_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '-' || c == '_'
+}
+
+pub fn is_valid_msg_type(msg_type: &str) -> bool {
+    if msg_type.is_empty() {
+        return false;
+    }
+
+    for b in msg_type.as_bytes() {
+        if !is_valid_name_char(*b as char) {
+            return false;
+        }
+    }
+
+    true
+}
+
+pub fn is_valid_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+
+    for b in name.as_bytes() {
+        if !is_valid_name_char(*b as char) {
+            return false;
+        }
+    }
+
+    true
 }

@@ -1,12 +1,9 @@
 use std::env::args;
 use std::error::Error;
-use std::ops::DerefMut;
 use std::process::exit;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock};
 use log::{error, info, warn};
-use tokio::time::sleep;
 use crate::app::{execute_app, get_all_apps};
 
 use crate::config::config::{Config, config_load};

@@ -3,7 +3,8 @@ id:
   name: simple echo (internal)
   description: some generic workflow description
 apps:
-  - run_type: start_stop
+  - name: cntr1 
+    run_type: start_stop
     once_options:
     repeated_options:
     start_stop_options:

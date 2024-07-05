@@ -6,8 +6,8 @@ routes:
   - src:
       app: "stdin"
     dst:
-      - echo_system
+      - cntr1
   - src:
-      app: echo_system
+      app: cntr1
     dst:
       - "stdout"
