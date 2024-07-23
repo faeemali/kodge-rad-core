@@ -1,3 +1,4 @@
+- add a message id to allow for sync message processing
 - consider implementing xargs-style functionality for start_stop containers
 - !!!(necessary?) include the workflow id in messages, to allow for inter-workflow routing
 - add apps
@@ -5,3 +6,9 @@
 - build a ui
 - build server framework to download apps from the web (plugin framework)
 - add in licensing support
+
+
+Sample app:
+- webserver with 2 endpoints (e1, e2)
+- e1 goes to an app/script (stdin/stdout)
+- e2 dumps to a sqlite db
