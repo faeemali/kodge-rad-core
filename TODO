@@ -1,4 +1,21 @@
-- add a message id to allow for sync message processing
+- apps must be given an instance id. The router must route by instance id, not app id.
+  Apps should read some environment variable to receive their instance id. Apps must then
+  register with that instance id to the router. In the event of start-stop containers,
+  the container must do this (using vars or some other mechanism). This allows for multiple
+  copies of an app to be started an uniquely referenced within the system. The instance id
+  can simply be the container id, which must be unique
+- messages must be given an alias/type_prefix. If present, the router can perform additional
+  filtering using this field to determine which source messages must be routed to destinations.
+  If not present, this can be ignored. Alternatively, this can be calculated by
+  letting every message include the app name, message type, and optional prefix/alias/whatever
+  info.
+  Additionally, this implies that for a single app, there may be multiple entries in the
+  routing table, for different message types
+- add a message id to allow for sync message processing. the message id is optional. If
+  it exists, any subsequent messages must preserve the message id. For apps that rx
+  a message and produce a tx response, the message id must be preserved by the app. For
+  start_stop containers that integrate with stdin/stdout, the container must preserve the
+  message id for the tx message
 - consider implementing xargs-style functionality for start_stop containers
 - !!!(necessary?) include the workflow id in messages, to allow for inter-workflow routing
 - add apps
