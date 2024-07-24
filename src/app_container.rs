@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::sync::Arc;
@@ -34,10 +35,17 @@ pub const RUN_TYPE_START_STOP: &str = "start_stop";
 
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct OnceOptions {}
+pub struct OnceOptions {
+    /// if true, the app will not be started by the container. The container will just sit
+    /// in an endless loop waiting for the app to abort. The app will need to be manually started.
+    /// This is useful for debugging
+    pub disabled: bool,
+}
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct RepeatedOptions {
+    /// see OnceOptions::disabled for explanation
+    pub disabled: bool,
     pub restart_delay: u64,
 }
 
@@ -119,12 +127,50 @@ impl Container {
     }
 }
 
+const APP_INSTANCE_ID_KEY: &str = "RAD_INSTANCE_ID";
+
+fn is_once_or_repeated_container_disabled(container: &Container) -> bool {
+    if container.run_type == RUN_TYPE_ONCE {
+        if let Some(options) = &container.once_options {
+            options.disabled
+        } else {
+            false
+        }
+    } else if let Some(options) = &container.repeated_options {
+        options.disabled
+    } else {
+        false
+    }
+}
+
 async fn handle_once_and_repeated_containers(base_dir: &str,
                                              container: Container,
                                              bin_config: BinConfig,
                                              am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+    /* if disabled, just run in a loop forever */
+    if is_once_or_repeated_container_disabled(&container) {
+        warn!("Container {} marked as disabled. App must be manually started", &container.name);
+        loop {
+            sleep(Duration::from_millis(100)).await;
+            if utils::get_must_die(am_must_die.clone()).await {
+                warn!("Container {} (disabled) caught must die flag. Exiting", &container.name);
+                return Ok(());
+            }
+        }
+    }
+
+
     loop {
-        let join_handle = tokio::spawn(run_bin_main(base_dir.to_string(), bin_config.clone(), am_must_die.clone()));
+        //let the instance id be the same as the container id, since the container id must be unique
+        let mut env = HashMap::new();
+        env.insert(APP_INSTANCE_ID_KEY.to_string(), container.name.to_string());
+
+        let join_handle = tokio::spawn(
+            run_bin_main(
+                base_dir.to_string(),
+                bin_config.clone(),
+                env,
+                am_must_die.clone()));
         if let Err(e) = join_handle.await? {
             error!("Error running bin: {:?} for container: {}", e, &container.name);
         } else {
@@ -357,6 +403,7 @@ async fn handle_start_stop_container(base_dir: &str,
                     /* spawn a task and pass the message to stdio */
                     let mut child = spawn_process(base_dir,
                                                   &bin_config,
+                                                  None,
                                                   &opts.redirect_msgs_to_stdin,
                                                   &opts.redirect_stdout_to_msgs)?;
 

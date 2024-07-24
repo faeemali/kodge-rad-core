@@ -195,7 +195,7 @@ async fn process_connection(mut sock: TcpStream,
         router_tx,
         router_rx: None,
     };
-
+    
     let mut registered = false;
     loop {
         if conn_ctx.auth_timer.timed_out() && conn_ctx.state == Authenticate {
@@ -213,8 +213,13 @@ async fn process_connection(mut sock: TcpStream,
 
         let ready = sock.ready(Interest::WRITABLE | Interest::READABLE).await?;
 
-        if ready.is_error() || ready.is_read_closed() || ready.is_write_closed() {
-            error!("Error determining socket readiness, or reader/writer closed. Aborting connection");
+        if ready.is_error() {
+            error!("Error determining socket readiness. Aborting connection");
+            break;
+        }
+
+        if ready.is_read_closed() || ready.is_write_closed() {
+            error!("Reader/writer closed. Aborting connection");
             break;
         }
 

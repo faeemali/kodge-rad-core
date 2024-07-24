@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use tokio::process::{Child, Command};
 use std::process::{ExitStatus, Stdio};
@@ -26,6 +27,7 @@ async fn __check_app_exit(child: &mut Child, app_id: &str) -> Result<Option<Exit
 
 pub fn spawn_process(base_dir: &str,
                      bin_config: &BinConfig,
+                     env_opt: Option<HashMap<String, String>>,
                      capture_stdin: &Option<String>,
                      capture_stdout: &Option<String>) -> Result<Child, Box<dyn Error + Sync + Send>> {
     let exec_cmd = &bin_config.execution.cmd;
@@ -50,6 +52,10 @@ pub fn spawn_process(base_dir: &str,
         process.current_dir(working_dir);
     }
 
+    if let Some(env) = &env_opt {
+        process.envs(env);
+    }
+
     if capture_stdin.is_some() {
         process = process.stdin(Stdio::piped());
     } else {
@@ -71,10 +77,13 @@ pub fn spawn_process(base_dir: &str,
 /// it terminated, or the must_die flag is set
 pub async fn run_bin_main(base_dir: String,
                           app: BinConfig,
-                          am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+                          env: HashMap<String, String>,
+                          am_must_die: Arc<RwLock<bool>>)
+                          -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("Managing app task for: {}", &app.id.id);
     let mut child = spawn_process(&base_dir,
                                   &app,
+                                  Some(env),
                                   &None,
                                   &None)?;
 

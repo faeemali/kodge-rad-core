@@ -43,6 +43,16 @@ pub struct Protocol {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MessageHeader {
+    /// this must be a unique name for the app. Typically, this is the container
+    /// id, since each container must have a unique name, and every container
+    /// only runs/manages one app. It is important that the actual app name is not
+    /// used. For instance, if an app is called "echo" for instance, and the "echo"
+    /// app is used several times in a workflow, the router will not know which
+    /// instance of "echo" to reference when routing messages. However, since
+    /// every copy of "echo" runs in a container with a unique id, but setting
+    /// the name to the container id, the router will be able to reference every
+    /// running instance of "echo" individually. The name, therefore, doubles
+    /// as an "instance id"
     pub name: String,
     pub msg_type: String,
     pub length: u32,

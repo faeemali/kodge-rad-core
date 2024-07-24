@@ -3,9 +3,10 @@ id:
   name: simple echo (internal)
   description: some generic workflow description
 apps:
-  - name: cntr1    
+  - name: echo_cntr1
     run_type: once
     once_options:
+      disabled: false #for debugging
     repeated_options:
     start_stop_options:
     bin:
