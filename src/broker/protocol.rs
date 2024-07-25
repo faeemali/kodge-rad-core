@@ -3,6 +3,7 @@ use std::time::Duration;
 use log::{debug};
 use serde::{Deserialize, Serialize};
 use crate::broker::protocol::States::{GetBody, GetCrc, GetFooter, GetHeader, GetMessageHeader};
+use crate::config::config_common::KVPair;
 use crate::error::RadError;
 use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
@@ -41,6 +42,17 @@ pub struct Protocol {
     timer: Timer,
 }
 
+/// Don't match any routing keys, even if specified
+pub const RK_MATCH_TYPE_NONE: &str = "none";
+
+/// All routing keys must be matched i.e. all routing keys in the message
+/// and the routing keys in the router must be the same
+pub const RK_MATCH_TYPE_ALL: &str = "all";
+
+/// any of the routing keys in the message (i.e. just one) must match
+/// the keys specified in the router
+pub const RK_MATCH_TYPE_ANY: &str = "any";
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MessageHeader {
     /// this must be a unique name for the app. Typically, this is the container
@@ -54,7 +66,27 @@ pub struct MessageHeader {
     /// running instance of "echo" individually. The name, therefore, doubles
     /// as an "instance id"
     pub name: String,
+    
+    /// additional routing keys. May be empty
+    pub rks: Vec<String>,
+    
+    /// how to match routing keys, if any are specified. Must be one of the
+    /// RK_MATCH_TYPE_XXX constants
+    pub rks_match_type: String,
+    
+    /// Used for synchronizing message requests and responses. Allows for comms
+    /// to be synchronous
+    pub message_id: String,
+    
+    /// name of the workflow
+    pub workflow: String,
+    
     pub msg_type: String,
+    
+    /// optional extras. For instance, a webserver may decide to include
+    /// http headers here
+    pub extras: Option<Vec<KVPair>>,
+    
     pub length: u32,
 }
 

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinSet;
 use crate::AppCtx;
-use crate::broker::protocol::{Message, MessageHeader};
+use crate::broker::protocol::{Message, MessageHeader, RK_MATCH_TYPE_NONE};
 use crate::config::config_common::ConfigId;
 use crate::error::{raderr};
 use crate::utils::utils;
@@ -77,7 +77,9 @@ fn find_app_by_id(base_dir: &str, app_id: &str) -> Result<Option<App>, Box<dyn E
 pub const STDIN: &str = "stdin";
 pub const STDOUT: &str = "stdout";
 
-async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>, msg_type: String) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>,
+                                       msg_type: String)
+                                       -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut b = [0u8; 1024];
     loop {
         /* TODO: how do i interrupt this? The app can't die correctly because this is a blocking read */
@@ -97,8 +99,13 @@ async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>, msg_type: Stri
         stdin_tx.send(Message {
             header: MessageHeader {
                 name: STDIN.to_string(),
+                workflow: "[None]".to_string(), //there's no workflow at the app level
+                rks: vec![],
+                rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
+                message_id: String::new(),
                 msg_type: msg_type.to_string(),
                 length: size as u32,
+                extras: None,
             },
             body: b[0..size].to_vec(),
         }).await?;
@@ -125,9 +132,7 @@ async fn handle_stdout_passthrough_main(stdout_rx: Receiver<Message>, msg_type: 
         }
 
         match stdout().write_all(msg.body.as_slice()) {
-            Ok(r) => {
-
-            }
+            Ok(r) => {}
             Err(e) => {
                 let msg = format!("stdout tx error: {}", &e);
                 error!("{}", &msg);

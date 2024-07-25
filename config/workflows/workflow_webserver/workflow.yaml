@@ -1,0 +1,22 @@
+id:
+  id: workflow_webserver
+  name: webserver test
+  description: some generic workflow description
+apps:
+  - name: webserver_cntr
+    run_type: once
+    once_options:
+      disabled: true
+    repeated_options:
+    start_stop_options:
+    bin:
+      name: rad-webserver
+  - name: echo_cntr
+    run_type: start_stop
+    once_options:
+    repeated_options:
+    start_stop_options:
+      redirect_msgs_to_stdin: string
+      redirect_stdout_to_msgs: string
+    bin:
+      name: rad-webserver

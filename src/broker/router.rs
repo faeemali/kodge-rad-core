@@ -12,7 +12,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::app::STDOUT;
-use crate::broker::protocol::Message;
+use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY, RK_MATCH_TYPE_NONE};
 use crate::error::{raderr};
 use crate::utils::utils;
 
@@ -47,6 +47,42 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
     }
 }
 
+/// checks if the message can be sent to the destinations specified in rksdsts by 
+/// matching the routing keys in the message against the routing keys in the route,
+/// depending on the routing key match type specified in the message
+fn message_matches_routing_keys(msg: &Message, rksdsts: &RksDsts) -> bool {
+    if msg.header.rks_match_type == RK_MATCH_TYPE_NONE {
+        /* no routing keys to be matched. This message is valid */
+        return true;
+    }
+
+    if msg.header.rks_match_type == RK_MATCH_TYPE_ALL {
+        if msg.header.rks.len() != rksdsts.rks.len() {
+            return false;
+        }
+
+        for rk in &msg.header.rks {
+            if !rksdsts.rks.contains(rk) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /* we only need one routing key to match */
+    if msg.header.rks_match_type == RK_MATCH_TYPE_ANY {
+        for rk in &msg.header.rks {
+            return rksdsts.rks.contains(rk);
+        }
+
+        return false;
+    }
+
+    warn!("Invalid message match type: {}", &msg.header.rks_match_type);
+    false
+}
+
 
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
@@ -54,15 +90,19 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     let key = format!("{}/*", &msg.header.name);
     let val_opt = ctx.routes_map.get(&key);
     if let Some(val) = val_opt {
-        //println!("returning routes (0): {:?}", val);
-        return Some(val);
+        if message_matches_routing_keys(msg, val) {
+            //println!("returning routes (0): {:?}", val);
+            return Some(&val.dsts);
+        }
     }
 
     let key = format!("{}/{}", &msg.header.name, &msg.header.msg_type);
     let val_opt = ctx.routes_map.get(&key);
     if let Some(val) = val_opt {
         //println!("returning routes: {:?}", val);
-        return Some(val);
+        if message_matches_routing_keys(msg, val) {
+            return Some(&val.dsts)
+        }
     }
 
     None
@@ -113,7 +153,7 @@ struct RouterCtx {
     pub route_config: RouteConfig,
 
     /// a map of message types and their respective destinations
-    pub routes_map: HashMap<String, Vec<String>>,
+    pub routes_map: HashMap<String, RksDsts>,
 
     //for sending data to stdout
     pub stdout_chan_opt: Option<Sender<Message>>,
@@ -123,6 +163,7 @@ struct RouterCtx {
 struct RouteSrc {
     pub app: String, //application name
     pub types: Option<Vec<String>>, //the message types to route
+    pub rks: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -146,21 +187,41 @@ async fn read_config(workflow_base_dir: String) -> Result<RouteConfig, Box<dyn E
     Ok(routes)
 }
 
-/// Convert routes into key=="name/message_type" and val==dst
+struct RksDsts {
+    /// Routing keys
+    pub rks: Vec<String>,
+
+    /// Destinations
+    pub dsts: Vec<String>,
+}
+
+/// Convert routes into key=="name/message_type" and val=={\[rks],\[dst]}
 /// The special source \[stdin] and the special dst \[stdout]
 /// link the the route to stdin/stdout
-async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<String>> {
+async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, RksDsts> {
     let mut routes_map = HashMap::new();
     for route in &route_config.routes {
+        let rks = if let Some(r) = &route.src.rks {
+            r.clone()
+        } else {
+            vec![]
+        };
+
         if let Some(types) = &route.src.types {
             for t in types {
                 let route_key = format!("{}/{}", route.src.app, t);
-                routes_map.insert(route_key, route.dst.clone());
+                routes_map.insert(route_key, RksDsts {
+                    rks: rks.clone(),
+                    dsts: route.dst.clone(),
+                });
             }
         } else {
             /* applicable for all types */
             let route_key = format!("{}/*", route.src.app);
-            routes_map.insert(route_key, route.dst.clone());
+            routes_map.insert(route_key, RksDsts {
+                rks: rks.clone(),
+                dsts: route.dst.clone(),
+            });
         }
     }
 

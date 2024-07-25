@@ -1,8 +1,4 @@
 routes:
-#  - src:
-#      app: echo
-#    dst:
-#      - echo
   - src:
       app: "stdin"
     dst:

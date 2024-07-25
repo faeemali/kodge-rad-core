@@ -78,6 +78,7 @@ impl WorkflowCtx {
         let containers = self.containers.deref();
         for container in containers {
             tokio::spawn(run_container_main(self.base_dir.to_string(),
+                                            self.workflow.id.id.clone(),
                                             container.clone(),
                                             self.broker_listen_port,
                                             self.must_die.clone()));
@@ -135,6 +136,7 @@ pub async fn execute_workflow(app_ctx: AppCtx,
     };
 
     tokio::spawn(broker_main(wf_dir,
+                             workflow_id.clone(),
                              app_ctx.config.broker.clone(),
                              stdin_chan_opt,
                              stdout_chan_opt,
