@@ -47,7 +47,7 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
     }
 }
 
-/// checks if the message can be sent to the destinations specified in rksdsts by 
+/// checks if the message can be sent to the destinations specified in rksdsts by
 /// matching the routing keys in the message against the routing keys in the route,
 /// depending on the routing key match type specified in the message
 fn message_matches_routing_keys(msg: &Message, rksdsts: &RksDsts) -> bool {
@@ -73,7 +73,9 @@ fn message_matches_routing_keys(msg: &Message, rksdsts: &RksDsts) -> bool {
     /* we only need one routing key to match */
     if msg.header.rks_match_type == RK_MATCH_TYPE_ANY {
         for rk in &msg.header.rks {
-            return rksdsts.rks.contains(rk);
+            if rksdsts.rks.contains(rk) {
+                return true;
+            }
         }
 
         return false;
