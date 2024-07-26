@@ -99,7 +99,6 @@ async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>,
         stdin_tx.send(Message {
             header: MessageHeader {
                 name: STDIN.to_string(),
-                workflow: "[None]".to_string(), //there's no workflow at the app level
                 rks: vec![],
                 rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
                 message_id: String::new(),

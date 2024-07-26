@@ -78,9 +78,6 @@ pub struct MessageHeader {
     /// to be synchronous
     pub message_id: String,
     
-    /// name of the workflow
-    pub workflow: String,
-    
     pub msg_type: String,
     
     /// optional extras. For instance, a webserver may decide to include

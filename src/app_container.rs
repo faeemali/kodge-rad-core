@@ -199,7 +199,6 @@ async fn handle_once_and_repeated_containers(base_dir: &str,
 }
 
 async fn authenticate_client_connection(conn: &mut TcpStream,
-                                        workflow_id: String,
                                         container: &Container,
                                         protocol: &mut Protocol)
                                         -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -237,7 +236,6 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
         let auth_msg = Message {
             header: MessageHeader {
                 name: container.name.to_string(),
-                workflow: workflow_id.clone(),
                 rks: vec![],
                 rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
                 message_id: String::new(),
@@ -304,7 +302,6 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
 /// messages. These messages are then passed back to the container for
 /// conversion to stdio
 async fn handle_start_stop_container_client(broker_listen_port: u16,
-                                            workflow_id: String,
                                             container: Container,
                                             to_container: Sender<Message>,
                                             from_container: Receiver<Message>,
@@ -314,7 +311,7 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
     let mut b = [0u8; 1024];
     let mut conn = TcpStream::connect(format!("localhost:{}", broker_listen_port)).await?;
-    authenticate_client_connection(&mut conn, workflow_id.clone(), &container, &mut protocol).await?;
+    authenticate_client_connection(&mut conn, &container, &mut protocol).await?;
 
     loop {
         if utils::get_must_die(am_must_die.clone()).await {
@@ -373,7 +370,6 @@ async fn handle_start_stop_container_client(broker_listen_port: u16,
 
 
 async fn handle_start_stop_container(base_dir: &str,
-                                     workflow_id: String,
                                      container: Container,
                                      bin_config: BinConfig,
                                      broker_listen_port: u16,
@@ -387,10 +383,8 @@ async fn handle_start_stop_container(base_dir: &str,
         info!("Starting loopback stdio<->broker bridge for container {}", &container.name);
         let am_must_die_clone = am_must_die.clone();
         let container_clone = container.clone();
-        let workflow_id_clone = workflow_id.clone();
         tokio::spawn(async move {
             let res = handle_start_stop_container_client(broker_listen_port,
-                                                         workflow_id_clone,
                                                          container_clone,
                                                          tx_from_broker,
                                                          rx_from_container,
@@ -438,7 +432,6 @@ async fn handle_start_stop_container(base_dir: &str,
                             let msg = Message {
                                 header: MessageHeader {
                                     name: container.name.clone(),
-                                    workflow: workflow_id.clone(),
                                     rks: vec![],
                                     rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
                                     message_id: msg.header.message_id.clone(),
@@ -478,7 +471,6 @@ async fn handle_start_stop_container(base_dir: &str,
 }
 
 pub async fn run_container_main(base_dir: String,
-                                workflow_id: String,
                                 container: Container,
                                 broker_listen_port: u16,
                                 am_must_die: Arc<RwLock<bool>>) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -497,7 +489,6 @@ pub async fn run_container_main(base_dir: String,
                                             am_must_die.clone()).await
     } else if container.run_type == RUN_TYPE_START_STOP {
         handle_start_stop_container(&base_dir,
-                                    workflow_id.clone(),
                                     container,
                                     bin_config,
                                     broker_listen_port,

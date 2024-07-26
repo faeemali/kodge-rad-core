@@ -176,7 +176,6 @@ struct ConnectionCtx {
 
 async fn process_connection(mut sock: TcpStream,
                             addr: SocketAddr,
-                            workflow_id: String,
                             ctrl_tx: Sender<ControlMessages>,
                             router_tx: Sender<Message>,
                             am_must_die: Arc<RwLock<bool>>)
@@ -251,7 +250,6 @@ async fn process_connection(mut sock: TcpStream,
                                 let msg = Message {
                                     header: MessageHeader {
                                         name,
-                                        workflow: workflow_id.to_string(),
                                         rks: vec![],
                                         rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
                                         message_id: String::new(),
@@ -362,7 +360,6 @@ async fn process_connection(mut sock: TcpStream,
 
 ///start the broker, which includes the socket listener, router, and control plane
 pub async fn broker_main(workflow_base_dir: String,
-                         workflow_id: String,
                          cfg: BrokerConfig,
                          stdin_chan_opt: Option<Receiver<Message>>,
                          stdout_chan_opt: Option<Sender<Message>>,
@@ -394,7 +391,6 @@ pub async fn broker_main(workflow_base_dir: String,
                 let (sock, addr) = res.unwrap();
                         tokio::spawn(process_connection(sock,
                                         addr,
-                                        workflow_id.clone(),
                                         ctrl_tx.clone(), //for sending messages to the control plane
                                         router_conn_tx.clone(),
                                         am_must_die.clone())); //for sending messages to the router
