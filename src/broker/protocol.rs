@@ -42,9 +42,6 @@ pub struct Protocol {
     timer: Timer,
 }
 
-/// Don't match any routing keys, even if specified
-pub const RK_MATCH_TYPE_NONE: &str = "none";
-
 /// All routing keys must be matched i.e. all routing keys in the message
 /// and the routing keys in the router must be the same
 pub const RK_MATCH_TYPE_ALL: &str = "all";
@@ -68,11 +65,11 @@ pub struct MessageHeader {
     pub name: String,
     
     /// additional routing keys. May be empty
-    pub rks: Vec<String>,
+    pub rks: Option<Vec<String>>,
     
     /// how to match routing keys, if any are specified. Must be one of the
     /// RK_MATCH_TYPE_XXX constants
-    pub rks_match_type: String,
+    pub rks_match_type: Option<String>,
     
     /// Used for synchronizing message requests and responses. Allows for comms
     /// to be synchronous

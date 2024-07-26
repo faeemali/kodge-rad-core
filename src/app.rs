@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinSet;
 use crate::AppCtx;
-use crate::broker::protocol::{Message, MessageHeader, RK_MATCH_TYPE_NONE};
+use crate::broker::protocol::{Message, MessageHeader};
 use crate::config::config_common::ConfigId;
 use crate::error::{raderr};
 use crate::utils::utils;
@@ -99,8 +99,8 @@ async fn handle_stdin_passthrough_main(stdin_tx: Sender<Message>,
         stdin_tx.send(Message {
             header: MessageHeader {
                 name: STDIN.to_string(),
-                rks: vec![],
-                rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
+                rks: None,
+                rks_match_type: None,
                 message_id: String::new(),
                 msg_type: msg_type.to_string(),
                 length: size as u32,

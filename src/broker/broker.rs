@@ -18,7 +18,7 @@ use crate::broker::broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
 use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
-use crate::broker::protocol::{Message, MessageHeader, Protocol, RK_MATCH_TYPE_NONE};
+use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::broker::router::router_main;
 use crate::error::{raderr};
 use crate::utils::timer::Timer;
@@ -250,8 +250,8 @@ async fn process_connection(mut sock: TcpStream,
                                 let msg = Message {
                                     header: MessageHeader {
                                         name,
-                                        rks: vec![],
-                                        rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
+                                        rks: None,
+                                        rks_match_type: None,
                                         message_id: String::new(),
                                         msg_type: MSG_TYPE_AUTH_RESP.to_string(),
                                         length: b.len() as u32,

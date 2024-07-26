@@ -13,7 +13,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
 use crate::bin::{BinConfig, load_bin};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
-use crate::broker::protocol::{Message, MessageHeader, Protocol, RK_MATCH_TYPE_NONE};
+use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::error::{raderr};
 use crate::process::{run_bin_main, spawn_process};
 use crate::utils::timer::Timer;
@@ -236,8 +236,8 @@ async fn authenticate_client_connection(conn: &mut TcpStream,
         let auth_msg = Message {
             header: MessageHeader {
                 name: container.name.to_string(),
-                rks: vec![],
-                rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
+                rks: None,
+                rks_match_type: None,
                 message_id: String::new(),
                 msg_type: MSG_TYPE_AUTH.to_string(),
                 length: req_bytes.len() as u32,
@@ -432,8 +432,8 @@ async fn handle_start_stop_container(base_dir: &str,
                             let msg = Message {
                                 header: MessageHeader {
                                     name: container.name.clone(),
-                                    rks: vec![],
-                                    rks_match_type: RK_MATCH_TYPE_NONE.to_string(),
+                                    rks: None,
+                                    rks_match_type: None,
                                     message_id: msg.header.message_id.clone(),
                                     msg_type: msg_type.to_string(),
                                     length: output.stdout.len() as u32,

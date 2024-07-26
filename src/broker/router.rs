@@ -12,7 +12,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::app::STDOUT;
-use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY, RK_MATCH_TYPE_NONE};
+use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::error::{raderr};
 use crate::utils::utils;
 
@@ -49,40 +49,54 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
 
 /// checks if the message can be sent to the destinations specified in rksdsts by
 /// matching the routing keys in the message against the routing keys in the route,
-/// depending on the routing key match type specified in the message
+/// depending on the routing key match type specified in the message.
+/// Rules:
+///  - All routing keys in the message and the router must be unique or else this algorithm
+///    may fail when matching all. This *flaw* is allowed in the interests of speed. A better
+///    algorithm can definitely be used that also checks for duplicates, but that is slower on
+///    a per-message basis
+///  - If match type is invalid, the message is not matched
+///  - If match type is None, the message is matched successfully, regardless of the value of rks
+///  - If match type is Some, and rks is Some, then matching proceeds as normal
 fn message_matches_routing_keys(msg: &Message, rksdsts: &RksDsts) -> bool {
-    if msg.header.rks_match_type == RK_MATCH_TYPE_NONE {
-        /* no routing keys to be matched. This message is valid */
-        return true;
-    }
+    match &msg.header.rks_match_type {
+        Some(mt) => {
+            if let Some(rks) = &msg.header.rks {
+                if mt == RK_MATCH_TYPE_ALL {
+                    if rks.len() != rksdsts.rks.len() {
+                        return false;
+                    }
 
-    if msg.header.rks_match_type == RK_MATCH_TYPE_ALL {
-        if msg.header.rks.len() != rksdsts.rks.len() {
-            return false;
-        }
+                    for rk in rks {
+                        if !rksdsts.rks.contains(rk) {
+                            return false;
+                        }
+                    }
 
-        for rk in &msg.header.rks {
-            if !rksdsts.rks.contains(rk) {
-                return false;
+                    true
+                } else if mt == RK_MATCH_TYPE_ANY {
+                    /* we only need one routing key to match */
+                    for rk in rks {
+                        if rksdsts.rks.contains(rk) {
+                            return true;
+                        }
+                    }
+
+                    false
+                } else {
+                    warn!("Invalid message match type: {}", mt);
+                    false
+                }
+            } else {
+                /* we have a routing key match type by no routing key. Disallow message */
+                false
             }
         }
-
-        return true;
-    }
-
-    /* we only need one routing key to match */
-    if msg.header.rks_match_type == RK_MATCH_TYPE_ANY {
-        for rk in &msg.header.rks {
-            if rksdsts.rks.contains(rk) {
-                return true;
-            }
+        None => {
+            /* no routing keys to be matched. This message is valid */
+            true
         }
-
-        return false;
     }
-
-    warn!("Invalid message match type: {}", &msg.header.rks_match_type);
-    false
 }
 
 
@@ -103,7 +117,7 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     if let Some(val) = val_opt {
         //println!("returning routes: {:?}", val);
         if message_matches_routing_keys(msg, val) {
-            return Some(&val.dsts)
+            return Some(&val.dsts);
         }
     }
 
