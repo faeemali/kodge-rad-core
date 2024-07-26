@@ -54,73 +54,114 @@ async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages
 ///  - All routing keys in the message and the router must be unique or else this algorithm
 ///    may fail when matching all. This *flaw* is allowed in the interests of speed. A better
 ///    algorithm can definitely be used that also checks for duplicates, but that is slower on
-///    a per-message basis
+///    a per-message basis. TODO: eliminate duplicates during pre-processing. That should fix all
+///    problems.
 ///  - If match type is invalid, the message is not matched
 ///  - If match type is None, the message is matched successfully, regardless of the value of rks
+///  - If match type is Some, and rks is None, then the message is not matched
 ///  - If match type is Some, and rks is Some, then matching proceeds as normal
-fn message_matches_routing_keys(msg: &Message, rksdsts: &RksDsts) -> bool {
-    match &msg.header.rks_match_type {
-        Some(mt) => {
-            if let Some(rks) = &msg.header.rks {
-                if mt == RK_MATCH_TYPE_ALL {
-                    if rks.len() != rksdsts.rks.len() {
-                        return false;
-                    }
+fn message_matches_routing_keys<'a>(msg: &Message, rt_rks_dsts_list: &'a [RksDsts]) -> Option<&'a Vec<String>> {
+    if let Some(msg_match_type) = &msg.header.rks_match_type {
+        //match_type is some
 
-                    for rk in rks {
-                        if !rksdsts.rks.contains(rk) {
-                            return false;
+        if let Some(msg_rks) = &msg.header.rks {
+            /* process all i.e. all keys must match */
+            if msg_match_type == RK_MATCH_TYPE_ALL {
+                /*
+                    match for all "routing keys"/"list of destinations" combinations.
+                    We're looking for one entry from the Vec that matches.
+                 */
+                for rt_rks_dsts in rt_rks_dsts_list {
+                    if let Some(rt_rks) = &rt_rks_dsts.rks {
+                        if msg_rks.len() != rt_rks.len() {
+                            //invalid lengths means they cannot possibly match all
+                            continue;
                         }
-                    }
 
-                    true
-                } else if mt == RK_MATCH_TYPE_ANY {
-                    /* we only need one routing key to match */
-                    for rk in rks {
-                        if rksdsts.rks.contains(rk) {
-                            return true;
+                        /*
+                           use the cheap algorithm and just confirm every item in the routing table rks
+                           exists in the message as well.
+                         */
+                        let mut found_all = true;
+                        for rt_rk in rt_rks {
+                            if !msg_rks.contains(rt_rk) {
+                                found_all = false;
+                                break;
+                            }
                         }
-                    }
 
-                    false
-                } else {
-                    warn!("Invalid message match type: {}", mt);
-                    false
+                        if found_all {
+                            /* found a match! */
+                            return Some(&rt_rks_dsts.dsts);
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        /* no routing keys for the routing table */
+                        continue;
+                    }
                 }
+                None
+            } else if msg_match_type == RK_MATCH_TYPE_ANY {
+                /* we only need one routing key to match from any item in the list */
+                for rt_rks_dsts in rt_rks_dsts_list {
+                    if let Some(rt_rks) = &rt_rks_dsts.rks {
+                        for rt_rk in rt_rks {
+                            if msg_rks.contains(rt_rk) {
+                                return Some(&rt_rks_dsts.dsts);
+                            }
+                        }
+                    } else {
+                        /* no routing keys == no match */
+                        continue;
+                    }
+                }
+                None
             } else {
-                /* we have a routing key match type by no routing key. Disallow message */
-                false
+                debug!("Invalid message match type: {}", msg_match_type);
+                None
             }
+        } else {
+            /* we have a routing key match type by no routing keys. Disallow message */
+            None
         }
-        None => {
-            /* no routing keys to be matched. This message is valid */
-            true
+    } else {
+        /* match_type is none no routing keys to be matched. This message is valid, provided there's only one set of destinations */
+        if rt_rks_dsts_list.len() != 1 {
+            debug!("Message being discarded because routing is ambiguous. {}/{} has multiple destination groups, but no routing key match type", &msg.header.name, &msg.header.msg_type);
+            return None;
         }
+        Some(&rt_rks_dsts_list[0].dsts)
     }
 }
 
+fn __match_route<'a>(msg: &Message, key: &str, val_opt: &Option<&'a Vec<RksDsts>>) -> Option<&'a Vec<String>>{
+    if let Some(val) = val_opt {
+        if let Some(dsts) = message_matches_routing_keys(msg, val) {
+            debug!("returning route dsts for {}: {:?}", &key, dsts);
+            return Some(dsts);
+        }
+    }
+    None
+}
 
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
 async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
     let key = format!("{}/*", &msg.header.name);
     let val_opt = ctx.routes_map.get(&key);
-    if let Some(val) = val_opt {
-        if message_matches_routing_keys(msg, val) {
-            //println!("returning routes (0): {:?}", val);
-            return Some(&val.dsts);
-        }
+    let ret = __match_route(msg, &key, &val_opt);
+    if ret.is_some() {
+        return ret;
     }
 
     let key = format!("{}/{}", &msg.header.name, &msg.header.msg_type);
     let val_opt = ctx.routes_map.get(&key);
-    if let Some(val) = val_opt {
-        //println!("returning routes: {:?}", val);
-        if message_matches_routing_keys(msg, val) {
-            return Some(&val.dsts);
-        }
+    let ret = __match_route(msg, &key, &val_opt);
+    if ret.is_some() {
+        return ret;
     }
-
+    
     None
 }
 
@@ -169,7 +210,7 @@ struct RouterCtx {
     pub route_config: RouteConfig,
 
     /// a map of message types and their respective destinations
-    pub routes_map: HashMap<String, RksDsts>,
+    pub routes_map: HashMap<String, Vec<RksDsts>>,
 
     //for sending data to stdout
     pub stdout_chan_opt: Option<Sender<Message>>,
@@ -203,43 +244,59 @@ async fn read_config(workflow_base_dir: String) -> Result<RouteConfig, Box<dyn E
     Ok(routes)
 }
 
+#[derive(Debug)]
 struct RksDsts {
     /// Routing keys
-    pub rks: Vec<String>,
+    pub rks: Option<Vec<String>>,
 
     /// Destinations
     pub dsts: Vec<String>,
 }
 
+fn __add_to_routes_map(route_key: &str,
+                       routes_map: &mut HashMap<String, Vec<RksDsts>>,
+                       rks: &Option<Vec<String>>,
+                       dsts: Vec<String>) {
+    let rks_opt = if let Some(r) = rks {
+        Some(r.clone())
+    } else {
+        None
+    };
+
+    if routes_map.contains_key(route_key) {
+        let rks_dsts = routes_map.get_mut(route_key).unwrap();
+        rks_dsts.push(RksDsts {
+            rks: rks_opt,
+            dsts,
+        });
+    } else {
+        /* insert new */
+        routes_map.insert(route_key.to_string(), vec![RksDsts {
+            rks: rks_opt,
+            dsts,
+        }]);
+    }
+}
+
 /// Convert routes into key=="name/message_type" and val=={\[rks],\[dst]}
 /// The special source \[stdin] and the special dst \[stdout]
 /// link the the route to stdin/stdout
-async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, RksDsts> {
+async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<RksDsts>> {
     let mut routes_map = HashMap::new();
     for route in &route_config.routes {
-        let rks = if let Some(r) = &route.src.rks {
-            r.clone()
-        } else {
-            vec![]
-        };
-
         if let Some(types) = &route.src.types {
             for t in types {
                 let route_key = format!("{}/{}", route.src.app, t);
-                routes_map.insert(route_key, RksDsts {
-                    rks: rks.clone(),
-                    dsts: route.dst.clone(),
-                });
+                __add_to_routes_map(&route_key, &mut routes_map, &route.src.rks, route.dst.clone());
             }
         } else {
             /* applicable for all types */
             let route_key = format!("{}/*", route.src.app);
-            routes_map.insert(route_key, RksDsts {
-                rks: rks.clone(),
-                dsts: route.dst.clone(),
-            });
+            __add_to_routes_map(&route_key, &mut routes_map, &route.src.rks, route.dst.clone());
         }
     }
+
+    debug!("routes after pre-processing: {:?}", &routes_map);
 
     routes_map
 }

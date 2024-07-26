@@ -234,10 +234,10 @@ async fn process_connection(mut sock: TcpStream,
                         break;
                     }
 
-                    debug!("Broker: read {} bytes", n);
+                    //debug!("Broker: read {} bytes", n);
                     busy = true;
                     let msgs = conn_ctx.protocol.feed(&data);
-                    debug!("broker: after feed: num messages = {}", msgs.len());
+                    //debug!("broker: after feed: num messages = {}", msgs.len());
                     if !registered {
                         match register_connection(&mut conn_ctx, msgs.clone()).await {
                             Ok(r) => {
@@ -309,6 +309,8 @@ async fn process_connection(mut sock: TcpStream,
                         }
                         let encoded_msg = encoded_msg_res.unwrap();
                         let encoded_slice = encoded_msg.as_slice();
+                        
+                        //debug!("Broker writing: {:?}", &encoded_slice);
 
                         let mut pos = 0usize;
                         loop {

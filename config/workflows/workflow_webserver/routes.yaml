@@ -15,7 +15,3 @@ routes:
       rks: ["say_goodbye"]
     dst:
       - echo_cntr
-  - src:
-      app: echo_cntr
-    dst:
-      - webserver_cntr 

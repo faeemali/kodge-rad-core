@@ -1,0 +1,76 @@
+Routing works as follows:
+
+There's a routing table with multiple routes that look like this:
+routes:
+  - src:
+      app: webserver_cntr
+      types: ["string"]
+      rks: ["say_hello"]
+    dst:
+      - echo_cntr
+  - src:
+      app: echo_cntr
+    dst:
+      - webserver_cntr
+  - src:
+      app: webserver_cntr
+      types: ["string"]
+      rks: ["say_goodbye"]
+    dst:
+      - echo_cntr
+  - src:
+      app: echo_cntr
+    dst:
+      - webserver_cntr
+
+
+Messages have several fields to match against the routing table:
+- name (corresponds to app field of the routing table)
+- msg_type - must belong to the types field of the routing table. If the types field does not exist, this means
+             the route is valid for all types
+- rks - a list of string routing keys. These are optional. If they exist, they must be matched against the rks field
+        of the route, which is also optional
+- rks_match_type - a string that can be either "all" or "any". "all" means all the routing keys of the message
+        must exist in the route. "any" means at least one of the keys in the message must exist in the route.
+        For speed, it is the responsibility of the message and the route to ensure there are no duplicates, or else
+        the algorithm may fail. rks_match_type is also optional.
+
+
+Because matching can be done by types AND routing key, there exists the possibility that 2 or more routes will have the same
+name and type, even though their routing keys are different.
+
+The key of the routing table hashmap is "name/type" or "name/*", where the "*" means "all types".
+An entry is created for every combination of name and type. For instance:
+- src:
+    app: test
+    types: ["a", "b", "c"]
+    ...
+    ...
+
+
+will result in the following keys being created:
+test/a
+test/b
+test/c
+
+The associated value for each of these keys is a struct containing:
+- the routing keys (Option<Vec<String>>>
+- the destinations (Vec<String>)
+
+and since there may be multiple routing keys, there may be multiple structs i.e. Vec<{Option<Vec<String>>, Vec<String>}>
+
+The routing rules are therefore as follows for every message that passes through the system:
+
+- if msg.rks_match_type is None, then no further matching is required and the route is valid. The routing keys do not need to be consulted.
+  However, the restriction is that the route (hashmap value) must contain only 1 item i.e. one set of routing keys and
+  destinations. In this case, because the match type is not specified, the routing keys will be ignored, even if specified,
+  and the list of destinations will be returned. If the route contains more than one value item, the route will not be matched.
+- If match type in the message is invalid (i.e. Some, but not a valid option ("all"/"any")), the message is not matched
+- If match type in the message is Some, and rks in the message is None, then the message is not matched
+- If match type is Some, and rks is Some, then matching proceeds as normal. This means "all" or "any" processing must
+  take place for each item in the Vec of values in the hashmap (for the associated routing key)
+
+
+For "normal" processing of the routing table:
+- if the message has a match_type and rks (routing keys), but the routing table entry does not have routing keys i.e. rks is None,
+  then the message is not allowed
