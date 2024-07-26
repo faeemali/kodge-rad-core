@@ -402,7 +402,7 @@ async fn handle_start_stop_container(base_dir: &str,
 
             match rx_broker_to_stdio.try_recv() {
                 Ok(msg) => {
-                    //debug!("Container {} received new message", &container_id);
+                    debug!("Container {} received new message", &container.name);
 
                     /* spawn a task and pass the message to stdio */
                     let mut child = spawn_process(base_dir,
@@ -415,6 +415,7 @@ async fn handle_start_stop_container(base_dir: &str,
                     if opts.redirect_msgs_to_stdin.is_some() {
                         /* write the message contents to stdin */
                         if let Some(ref mut stdin) = child.stdin {
+                            debug!("Writing to stdin: {}", std::str::from_utf8(&msg.body.as_slice()).unwrap_or("[decode_error]"));
                             stdin.write_all(&msg.body).await?;
                         }
                     }

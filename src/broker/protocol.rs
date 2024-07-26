@@ -30,7 +30,7 @@ pub const HEADER: u8 = 0xAA;
 pub const FOOTER: u8 = 0x55;
 
 const MAX_MSG_BODY_LENGTH: usize = 1048576; //1MB
-const MAX_MSG_HEADER_LENGTH: usize = 1024;
+const MAX_MSG_HEADER_LENGTH: usize = 10240 * 2;
 const MSG_RX_TIMEOUT_MS: u64 = 10000;
 
 pub struct Protocol {
@@ -63,24 +63,24 @@ pub struct MessageHeader {
     /// running instance of "echo" individually. The name, therefore, doubles
     /// as an "instance id"
     pub name: String,
-    
+
     /// additional routing keys. May be empty
     pub rks: Option<Vec<String>>,
-    
+
     /// how to match routing keys, if any are specified. Must be one of the
     /// RK_MATCH_TYPE_XXX constants
     pub rks_match_type: Option<String>,
-    
+
     /// Used for synchronizing message requests and responses. Allows for comms
     /// to be synchronous
     pub message_id: String,
-    
+
     pub msg_type: String,
-    
+
     /// optional extras. For instance, a webserver may decide to include
     /// http headers here
     pub extras: Option<Vec<KVPair>>,
-    
+
     pub length: u32,
 }
 
@@ -160,21 +160,27 @@ impl Protocol {
                             continue;
                         }
 
-                        if msg_header.length > MAX_MSG_BODY_LENGTH as u32 {
+                        if msg_header.length > MAX_MSG_HEADER_LENGTH as u32 {
                             debug!("Invalid message length");
                             self.reset();
                             continue;
                         }
 
+                        let body_len = msg_header.length;
                         self.header = Some(msg_header);
 
                         self.partial_reset();
-                        self.state = GetBody;
+                        
+                        if body_len == 0 {
+                            self.state = GetCrc;
+                        } else {
+                            self.state = GetBody;
+                        }
                         continue;
                     }
 
                     self.msg_buffer.push(*b);
-                    if self.msg_buffer.len() >= MAX_MSG_HEADER_LENGTH {
+                    if self.msg_buffer.len() >= MAX_MSG_BODY_LENGTH {
                         debug!("Overflow detected on message header. Ignoring");
                         self.reset();
                         continue;
