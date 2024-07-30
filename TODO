@@ -7,7 +7,53 @@
 - add in licensing support
 
 
-Sample app:
-- webserver with 2 endpoints (e1, e2)
-- e1 goes to an app/script (stdin/stdout)
-- e2 dumps to a sqlite db
+App Ideas:
+
+I/O:
+- file
+- socket (unix/tcp/udp/netcat)
+- excel/ods doc
+- word/odf doc
+- rabbitmq
+- kafka
+- mysql
+- postgresql
+- sqlite3
+- mongo
+- gpio (rpi)
+- i2c/spi tx/rx?
+- rs232 tx/rx (or socat?)
+- redis/valkey?
+- aws (s3, kinesis, mq, dynamodb)
+- webserver
+- grpc server
+- tcp/udp server
+- email
+- whatsapp/telegram/other?
+- authentication? google/aws/other?
+- something like the unix expect utility (or just use expect?)
+- something to monitor a directory and report when a file is added/deleted
+- rest client? (postman? curl?)
+- tx/rx mqtt message
+- oauth2 (login on website; auth details sync'ed to app?)
+
+transformers/filters:
+- xml/json/text/yaml
+- encryption
+- excel
+
+other:
+- logger
+
+App examples:
+- call webserver endpoint, feed data to transformer (eg. get username + action), read data from db based on
+  username, send data to (rabbitmq + logger + custom logic), custom logic performs a calculation with the data
+  and updates excel spreadsheet
+- backup image from sd card, read the list of user/password details from a text file and copy the backup
+  file to a bunch of other computers
+- read data (eg. logs) from database, filter out the necessary items, custom logic to calculate stats,
+  if problem detected use cURL/email to send notification
+- monitor a directory until a new jpeg is detected. Then, use imagemagick to resize the image and copy the
+  thumbnail to a different directory
+- When motion sensor detects movement a gpio is toggled on rpi which sends a message via mqtt. On the server,
+  the mqtt message is received and, 3 people specified in a excel spreadsheet are emailed
