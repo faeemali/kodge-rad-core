@@ -2,9 +2,10 @@ use std::env::args;
 use std::error::Error;
 use std::process::exit;
 use std::sync::Arc;
+use futures::StreamExt;
 use tokio::sync::{RwLock};
 use log::{error, info, warn};
-
+use crate::broker::broker::{broker_main, BrokerConfig};
 use crate::config::config::{Config, config_load};
 use crate::error::{raderr};
 use crate::utils::utils::set_must_die;
@@ -36,7 +37,7 @@ async fn handle_signal(am_must_die: Arc<RwLock<bool>>) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let args: Vec<String> = args().collect();
-    if args.len() < 3 {
+    if args.len() != 2 {
         show_help(&args[0]);
         exit(1);
     }
@@ -59,11 +60,18 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let am_must_die_clone = am_must_die.clone();
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
-    
-    info!("Main app exiting");
 
-    //exit is called here because, at the very least, reads from
-    //stdin() are blocking normal tokio exit. Just search the code for
-    //stdin().read
+    let handle = tokio::spawn(broker_main(base_dir.to_string(),
+                             BrokerConfig::new(config.broker.bind_addr.clone()),
+                             am_must_die.clone(),
+    ));
+
+    let res = tokio::join!(handle);
+    if let Err(e) = &res.0 {
+        error!("Error joining with broker: {}", e);
+        exit(1);
+    }
+
+    info!("Main app exiting");
     exit(0);
 }

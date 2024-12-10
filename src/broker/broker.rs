@@ -29,6 +29,14 @@ pub struct BrokerConfig {
     pub bind_addr: String,
 }
 
+impl BrokerConfig {
+    pub fn new(bind_addr: String) -> Self {
+        Self {
+            bind_addr,
+        }
+    }
+}
+
 #[derive(Eq, PartialEq)]
 enum States {
     Authenticate,
@@ -47,7 +55,7 @@ async fn __get_control_message(conn_ctx: &mut ConnectionCtx) -> Result<Actions, 
         match ctrl_rx.try_recv() {
             Ok(msg) => {
                 match &msg {
-                    ControlMessages::DisconnectMessage(m) => {
+                    DisconnectMessage(m) => {
                         return Ok(MustDisconnect);
                     }
 
@@ -362,14 +370,14 @@ async fn process_connection(mut sock: TcpStream,
 }
 
 ///start the broker, which includes the socket listener, router, and control plane
-pub async fn broker_main(workflow_base_dir: String,
+pub async fn broker_main(base_dir: String,
                          cfg: BrokerConfig,
                          am_must_die: Arc<RwLock<bool>>)
                          -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
-    tokio::spawn(router_main(workflow_base_dir,
+    tokio::spawn(router_main(base_dir,
                              router_ctrl_rx,
                              router_conn_rx,
                              am_must_die.clone()));
