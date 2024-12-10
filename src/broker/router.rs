@@ -308,11 +308,11 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>)
     Ok(msgs)
 }
 
-pub async fn router_main(workflow_base_dir: String,
+pub async fn router_main(base_dir: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>,
                          am_must_die: Arc<RwLock<bool>>) {
-    let routes_res = read_config(workflow_base_dir.clone()).await;
+    let routes_res = read_config(base_dir.clone()).await;
     if let Err(e) = routes_res {
         error!("Error loading routes: {}", &e);
         exit(1);

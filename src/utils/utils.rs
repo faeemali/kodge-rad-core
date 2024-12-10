@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fs::{File, read_dir};
-use std::ops::DerefMut;
+use std::ops::{DerefMut};
 use std::path::Path;
 use std::sync::Arc;
 use base64::DecodeError;
@@ -8,16 +8,17 @@ use base64::prelude::*;
 use serde::de::DeserializeOwned;
 use tokio::sync::{RwLock};
 use crate::error::raderr;
+use crate::utils::utils::TokenType::{Name, Variable, Version};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
-   match opt {
-       Some(s) => {
-           s.to_string()
-       }
-       None => {
-           "[unknown]".to_string()
-       }
-   } 
+    match opt {
+        Some(s) => {
+            s.to_string()
+        }
+        None => {
+            "[unknown]".to_string()
+        }
+    }
 }
 
 pub fn get_dirs(dir_path: &Path) -> Result<Vec<String>, std::io::Error> {
@@ -37,7 +38,7 @@ pub fn get_dirs(dir_path: &Path) -> Result<Vec<String>, std::io::Error> {
     Ok(dirs)
 }
 
-pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error + Sync + Send>>{
+pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error + Sync + Send>> {
     let path = Path::new(filename);
     let f = File::open(path)?;
     let yaml: T = serde_yaml::from_reader(&f)?;
@@ -60,38 +61,6 @@ pub async fn set_must_die(am_must_die: Arc<RwLock<bool>>) {
     *must_die = true;
 }
 
-pub fn is_valid_name_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '-' || c == '_'
-}
-
-pub fn is_valid_msg_type(msg_type: &str) -> bool {
-    if msg_type.is_empty() {
-        return false;
-    }
-
-    for b in msg_type.as_bytes() {
-        if !is_valid_name_char(*b as char) {
-            return false;
-        }
-    }
-
-    true
-}
-
-pub fn is_valid_name(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-
-    for b in name.as_bytes() {
-        if !is_valid_name_char(*b as char) {
-            return false;
-        }
-    }
-
-    true
-}
-
 ///given a server:port, returns the port as a u16
 pub fn find_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send + Sync>> {
     let pos_opt = bind_addr.find(':');
@@ -110,3 +79,88 @@ pub fn find_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send + S
     }
 }
 
+pub const MIN_NAME_LEN: usize = 1;
+pub const MAX_NAME_LEN: usize = 32;
+pub const MIN_VERSION_LEN: usize = 1;
+pub const MAX_VERSION_LEN: usize = 16;
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum TokenType {
+    Name,
+    Variable,
+    Version,
+}
+
+pub struct Validation {}
+
+impl Validation {
+    //alphanumeric, dash, underscore allowed
+    pub fn is_valid_name_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '-' || c == '_'
+    }
+
+    pub fn is_valid_variable_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    pub fn is_valid_version_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
+    }
+
+    ///checks if a name is valid. Names must be alphanumeric and contain
+    /// underscore or dash. Max length is 32, min is 1.
+    /// Name must start with a letter and terminate with an alphanumeric char
+    pub fn is_valid_token(name: &str, token_type: TokenType) -> bool {
+        let (min, max) = match token_type {
+            TokenType::Name => (MIN_NAME_LEN, MAX_NAME_LEN),
+            TokenType::Variable => (MIN_NAME_LEN, MAX_NAME_LEN),
+            TokenType::Version => (MIN_VERSION_LEN, MAX_VERSION_LEN),
+        };
+
+        let n = name.trim();
+        if n.len() < min || n.len() > max {
+            return false;
+        }
+
+        let nb: Vec<char> = name.chars().collect();
+        for c in &nb {
+            if token_type == TokenType::Variable && !Validation::is_valid_variable_char(*c) {
+                return false;
+            } else if token_type == TokenType::Name && !Validation::is_valid_name_char(*c) {
+                return false;
+            } else if token_type == TokenType::Version && !Validation::is_valid_version_char(*c) {
+                return false;
+            }
+        }
+
+        if !nb[0].is_alphabetic() {
+            return false;
+        }
+
+        if !nb[nb.len() - 1].is_alphanumeric() {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn is_valid_msg_type(msg_type: &str) -> bool {
+        Validation::is_valid_token(msg_type, Variable)
+    }
+
+    pub fn is_valid_name(name: &str) -> bool {
+        Validation::is_valid_token(name, Name)
+    }
+
+    pub fn is_valid_variable(var: &str) -> bool {
+        Validation::is_valid_token(var, Variable)
+    }
+    
+    pub fn is_valid_version(ver: &str) -> bool {
+        Validation::is_valid_token(ver, Version)
+    }
+    
+    pub fn is_valid_instance(instance: &str) -> bool {
+        Validation::is_valid_variable(instance)
+    }
+}

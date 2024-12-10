@@ -2,12 +2,10 @@ use std::env::args;
 use std::error::Error;
 use std::process::exit;
 use std::sync::Arc;
-use futures::StreamExt;
 use tokio::sync::{RwLock};
 use log::{error, info, warn};
 use crate::broker::broker::{broker_main, BrokerConfig};
-use crate::config::config::{Config, config_load};
-use crate::error::{raderr};
+use crate::config::config::{Config};
 use crate::utils::utils::set_must_die;
 
 mod utils;
@@ -26,7 +24,7 @@ pub struct AppCtx {
 }
 
 fn show_help(app_name: &str) {
-    println!("Usage: {} <config_dir>", app_name);
+    println!("Usage: {} <config_dir> <config_file>", app_name);
 }
 
 async fn handle_signal(am_must_die: Arc<RwLock<bool>>) {
@@ -37,14 +35,15 @@ async fn handle_signal(am_must_die: Arc<RwLock<bool>>) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let args: Vec<String> = args().collect();
-    if args.len() != 2 {
+    if args.len() != 3 {
         show_help(&args[0]);
         exit(1);
     }
 
     let base_dir = args[1].as_str();
+    let runtime_config = args[2].to_string();
 
-    let config = config_load(base_dir)?;
+    let config = Config::load(&runtime_config)?;
 
     log4rs::init_file(format!("{}/log_conf.yaml", base_dir), Default::default())?;
 

@@ -1,2 +1,13 @@
+#note: this config file does NOT need to be in the config directory
+#it can be anywhere
 broker:
   bind_addr: "0.0.0.0:8888"
+apps:
+  #format app_name (optional version) [optional instance IDs (comma separated)]
+  #if instance IDs are not specified, defaults to 0 only
+  - echo (0.0.1) 0,1
+routing:
+  #format src (optional types, comma separated)[optional routing keys, comma separated] -> dst
+  - echo-0 -> echo-1
+  - echo-1 -> echo-0
+
