@@ -1,0 +1,6 @@
+id: echo_system
+#name is optional
+name: system echo cmd
+#description is optional
+description: echoes data from the echo command on the system
+version: 0.0.1

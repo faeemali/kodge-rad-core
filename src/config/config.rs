@@ -10,7 +10,7 @@ pub struct Config {
 }
 
 pub fn config_load(base_dir: &str) -> Result<Config, Box<dyn Error + Sync + Send>> {
-    let path = format!("{}/config.yaml", base_dir);
+    let path = format!("{}/manifest.yaml", base_dir);
     let f = File::open(&path)?;
     let config = serde_yaml::from_reader::<&File, Config>(&f)?;
     Ok(config)

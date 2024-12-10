@@ -1,9 +1,0 @@
-id:
-  id: rad-webserver
-  name: webserver
-  description: webserver
-execution:
-  cmd: /Users/fali/Projects/kodgehopper/code/rad/rad-apps-go/rad-webserver
-  args:
-    - config
-  working_dir: /Users/fali/Projects/kodgehopper/code/rad/rad-apps-go/rad-webserver

@@ -1,0 +1,7 @@
+id: echo
+#name is optional
+name: echo script
+#description is optional
+description: echoes data
+version: 0.0.1
+  

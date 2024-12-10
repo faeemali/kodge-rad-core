@@ -11,7 +11,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use crate::app::STDOUT;
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::error::{raderr};
 use crate::utils::utils;
@@ -135,7 +134,7 @@ fn message_matches_routing_keys<'a>(msg: &Message, rt_rks_dsts_list: &'a [RksDst
     }
 }
 
-fn __match_route<'a>(msg: &Message, key: &str, val_opt: &Option<&'a Vec<RksDsts>>) -> Option<&'a Vec<String>>{
+fn __match_route<'a>(msg: &Message, key: &str, val_opt: &Option<&'a Vec<RksDsts>>) -> Option<&'a Vec<String>> {
     if let Some(val) = val_opt {
         if let Some(dsts) = message_matches_routing_keys(msg, val) {
             debug!("returning route dsts for {}: {:?}", &key, dsts);
@@ -161,7 +160,7 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     if ret.is_some() {
         return ret;
     }
-    
+
     None
 }
 
@@ -176,17 +175,7 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
         Some(dsts) => {
             /* send message to all dsts */
             for dst in dsts {
-                if dst == STDOUT {
-                    if let Some(stdout) = &ctx.stdout_chan_opt {
-                        if let Err(e) = stdout.send(msg.clone()).await {
-                            error!("Error sending message of type {} to stdout. Error: {}", &msg.header.msg_type, &e);
-                            return;
-                        }
-                    } else {
-                        error!("Message should be routed to stdout but stdout channel is None");
-                        return;
-                    }
-                } else if let Some(c) = find_connection_by_name(ctx, dst) {
+                if let Some(c) = find_connection_by_name(ctx, dst) {
                     if let Err(e) = c.conn_tx.send(msg.clone()).await {
                         error!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
                         return;
@@ -211,9 +200,6 @@ struct RouterCtx {
 
     /// a map of message types and their respective destinations
     pub routes_map: HashMap<String, Vec<RksDsts>>,
-
-    //for sending data to stdout
-    pub stdout_chan_opt: Option<Sender<Message>>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -301,8 +287,7 @@ async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<Rk
     routes_map
 }
 
-pub async fn get_message_from_src(conn: &mut Receiver<Message>,
-                                  stdin_opt: &mut Option<Receiver<Message>>)
+pub async fn get_message_from_src(conn: &mut Receiver<Message>)
                                   -> Result<Vec<Message>, Box<dyn Error + Sync + Send>> {
     let mut msgs = vec![];
 
@@ -319,30 +304,13 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>,
             }
         }
     }
-
-    if let Some(stdin) = stdin_opt {
-        match stdin.try_recv() {
-            Ok(msg) => {
-                msgs.push(msg);
-            }
-            Err(e) => {
-                if e == TryRecvError::Disconnected {
-                    let msg = "Router stdin disconnect detected. Aborting";
-                    error!("{}", msg);
-                    return raderr(msg);
-                }
-            }
-        }
-    }
-
+    
     Ok(msgs)
 }
 
 pub async fn router_main(workflow_base_dir: String,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>,
-                         stdin_chan_opt: Option<Receiver<Message>>,
-                         stdout_chan_opt: Option<Sender<Message>>,
                          am_must_die: Arc<RwLock<bool>>) {
     let routes_res = read_config(workflow_base_dir.clone()).await;
     if let Err(e) = routes_res {
@@ -356,10 +324,8 @@ pub async fn router_main(workflow_base_dir: String,
         connections: HashMap::new(),
         route_config,
         routes_map,
-        stdout_chan_opt,
     };
 
-    let mut m_stdin_chan_opt = stdin_chan_opt;
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
@@ -385,7 +351,7 @@ pub async fn router_main(workflow_base_dir: String,
         }
 
         //process messages from stdin or one of the connections
-        let msgs_res = get_message_from_src(&mut m_conn_rx, &mut m_stdin_chan_opt).await;
+        let msgs_res = get_message_from_src(&mut m_conn_rx).await;
         if let Err(e) = msgs_res {
             let msg = format!("Error retrieving source messages: {}", &e);
             error!("{}", &msg);

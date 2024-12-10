@@ -24,7 +24,7 @@ impl BinConfig {
 }
 
 pub fn load_bin(base_dir: &str, app_name: &str) -> Result<BinConfig, Box<dyn Error + Sync + Send>> {
-    let filename = format!("{}/cache/{}/config.yaml", base_dir, app_name);
+    let filename = format!("{}/cache/{}/manifest.yaml", base_dir, app_name);
     let bin = load_yaml::<BinConfig>(&filename)?;
     Ok(bin)
 }

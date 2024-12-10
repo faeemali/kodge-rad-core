@@ -7,6 +7,7 @@ use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
 use tokio::sync::{RwLock};
+use crate::error::raderr;
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
    match opt {
@@ -90,3 +91,22 @@ pub fn is_valid_name(name: &str) -> bool {
 
     true
 }
+
+///given a server:port, returns the port as a u16
+pub fn find_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send + Sync>> {
+    let pos_opt = bind_addr.find(':');
+    match pos_opt {
+        Some(pos) => {
+            if pos == (bind_addr.len() - 1) {
+                return raderr("Invalid format for broker bind address");
+            }
+            let port_s = &bind_addr[pos + 1..];
+            let port = port_s.parse::<u16>()?;
+            Ok(port)
+        }
+        None => {
+            raderr("Unable to determine port from broker bind address")
+        }
+    }
+}
+

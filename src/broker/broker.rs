@@ -364,8 +364,6 @@ async fn process_connection(mut sock: TcpStream,
 ///start the broker, which includes the socket listener, router, and control plane
 pub async fn broker_main(workflow_base_dir: String,
                          cfg: BrokerConfig,
-                         stdin_chan_opt: Option<Receiver<Message>>,
-                         stdout_chan_opt: Option<Sender<Message>>,
                          am_must_die: Arc<RwLock<bool>>)
                          -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
@@ -374,8 +372,6 @@ pub async fn broker_main(workflow_base_dir: String,
     tokio::spawn(router_main(workflow_base_dir,
                              router_ctrl_rx,
                              router_conn_rx,
-                             stdin_chan_opt,
-                             stdout_chan_opt,
                              am_must_die.clone()));
 
     let (ctrl_tx, ctrl_rx) = channel(32);

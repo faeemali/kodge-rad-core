@@ -1,8 +1,0 @@
-id:
-  id: app_webserver
-  name:
-  description:
-workflows:
-  - name: workflow_webserver
-    args:
-stdio:
