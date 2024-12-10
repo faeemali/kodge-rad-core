@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fs::{File, read_dir};
+use std::fs::{File};
 use std::ops::{DerefMut};
 use std::path::Path;
 use std::sync::Arc;
@@ -7,7 +7,6 @@ use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
 use tokio::sync::{RwLock};
-use crate::error::raderr;
 use crate::utils::utils::TokenType::{Name, Variable, Version};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
@@ -21,23 +20,7 @@ pub fn get_value_or_unknown(opt: &Option<String>) -> String {
     }
 }
 
-pub fn get_dirs(dir_path: &Path) -> Result<Vec<String>, std::io::Error> {
-    let mut dirs = Vec::new();
-    for entry in read_dir(dir_path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            let name_os = entry.file_name();
-            let name_opt = name_os.to_str();
-            if name_opt.is_none() {
-                continue;
-            }
-            let name = name_opt.unwrap();
-            dirs.push(name.to_string());
-        }
-    }
-    Ok(dirs)
-}
-
+#[allow(dead_code)]
 pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error + Sync + Send>> {
     let path = Path::new(filename);
     let f = File::open(path)?;
@@ -59,24 +42,6 @@ pub async fn set_must_die(am_must_die: Arc<RwLock<bool>>) {
     let mut must_die_mg = am_must_die.write().await;
     let must_die = must_die_mg.deref_mut();
     *must_die = true;
-}
-
-///given a server:port, returns the port as a u16
-pub fn find_listen_port(bind_addr: &str) -> Result<u16, Box<dyn Error + Send + Sync>> {
-    let pos_opt = bind_addr.find(':');
-    match pos_opt {
-        Some(pos) => {
-            if pos == (bind_addr.len() - 1) {
-                return raderr("Invalid format for broker bind address");
-            }
-            let port_s = &bind_addr[pos + 1..];
-            let port = port_s.parse::<u16>()?;
-            Ok(port)
-        }
-        None => {
-            raderr("Unable to determine port from broker bind address")
-        }
-    }
 }
 
 pub const MIN_NAME_LEN: usize = 1;
@@ -124,11 +89,9 @@ impl Validation {
 
         let nb: Vec<char> = name.chars().collect();
         for c in &nb {
-            if token_type == TokenType::Variable && !Validation::is_valid_variable_char(*c) {
-                return false;
-            } else if token_type == TokenType::Name && !Validation::is_valid_name_char(*c) {
-                return false;
-            } else if token_type == TokenType::Version && !Validation::is_valid_version_char(*c) {
+            if token_type == Variable && !Validation::is_valid_variable_char(*c) ||
+                token_type == Name && !Validation::is_valid_name_char(*c) ||
+                token_type == Version && !Validation::is_valid_version_char(*c) {
                 return false;
             }
         }
@@ -148,6 +111,7 @@ impl Validation {
         Validation::is_valid_token(msg_type, Variable)
     }
 
+    #[allow(dead_code)]
     pub fn is_valid_name(name: &str) -> bool {
         Validation::is_valid_token(name, Name)
     }
@@ -155,11 +119,11 @@ impl Validation {
     pub fn is_valid_variable(var: &str) -> bool {
         Validation::is_valid_token(var, Variable)
     }
-    
+
     pub fn is_valid_version(ver: &str) -> bool {
         Validation::is_valid_token(ver, Version)
     }
-    
+
     pub fn is_valid_instance(instance: &str) -> bool {
         Validation::is_valid_variable(instance)
     }

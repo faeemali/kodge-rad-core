@@ -7,7 +7,6 @@ use crate::config::config_common::KVPair;
 use crate::error::RadError;
 use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
-use crate::utils::utils;
 use crate::utils::utils::Validation;
 
 /**

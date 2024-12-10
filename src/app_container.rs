@@ -1,23 +1,14 @@
-use std::collections::HashMap;
 use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
-use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, error, info, warn};
-use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock};
-use tokio::io::{AsyncWriteExt, Interest};
+use log::{debug};
+use tokio::io::{AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
-use crate::bin::{BinConfig, load_bin};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::error::{raderr};
-use crate::process::{run_bin_main, spawn_process};
 use crate::utils::timer::Timer;
-use crate::utils::utils;
 
 async fn authenticate_client_connection(conn: &mut TcpStream,
                                         conn_name: String,
