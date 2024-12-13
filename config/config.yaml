@@ -7,7 +7,7 @@ apps:
   #if instance IDs are not specified, defaults to 0 only
   - echo (0.0.1) 0,1
 routing:
-  #format src (optional types, comma separated)[optional routing keys, comma separated] -> dst
+  #format src (optional types, comma separated)[optional routing keys, comma separated] -> dst1[,dst2[,dst3[...]]]
   - echo-0 -> echo-1
   - echo-1 -> echo-0
 

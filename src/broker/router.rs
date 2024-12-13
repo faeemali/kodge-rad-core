@@ -1,17 +1,15 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
-use serde::{Deserialize, Serialize};
-use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use serde::{Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
+use crate::config::config::{Config, Route};
 use crate::error::{raderr};
 use crate::utils::utils;
 
@@ -71,32 +69,33 @@ fn message_matches_routing_keys<'a>(msg: &Message, rt_rks_dsts_list: &'a [RksDst
                     We're looking for one entry from the Vec that matches.
                  */
                 for rt_rks_dsts in rt_rks_dsts_list {
-                    if let Some(rt_rks) = &rt_rks_dsts.rks {
-                        if msg_rks.len() != rt_rks.len() {
-                            //invalid lengths means they cannot possibly match all
-                            continue;
-                        }
+                    if rt_rks_dsts.rks.is_empty() {
+                        /* no routing keys in the routing table */
+                        continue;
+                    }
 
-                        /*
-                           use the cheap algorithm and just confirm every item in the routing table rks
-                           exists in the message as well.
-                         */
-                        let mut found_all = true;
-                        for rt_rk in rt_rks {
-                            if !msg_rks.contains(rt_rk) {
-                                found_all = false;
-                                break;
-                            }
-                        }
+                    let rt_rks = &rt_rks_dsts.rks;
+                    if msg_rks.len() != rt_rks.len() {
+                        //invalid lengths means they cannot possibly match all
+                        continue;
+                    }
 
-                        if found_all {
-                            /* found a match! */
-                            return Some(&rt_rks_dsts.dsts);
-                        } else {
-                            continue;
+                    /*
+                       use the cheap algorithm and just confirm every item in the routing table rks
+                       exists in the message as well.
+                     */
+                    let mut found_all = true;
+                    for rt_rk in rt_rks {
+                        if !msg_rks.contains(rt_rk) {
+                            found_all = false;
+                            break;
                         }
+                    }
+
+                    if found_all {
+                        /* found a match! */
+                        return Some(&rt_rks_dsts.dsts);
                     } else {
-                        /* no routing keys for the routing table */
                         continue;
                     }
                 }
@@ -104,15 +103,15 @@ fn message_matches_routing_keys<'a>(msg: &Message, rt_rks_dsts_list: &'a [RksDst
             } else if msg_match_type == RK_MATCH_TYPE_ANY {
                 /* we only need one routing key to match from any item in the list */
                 for rt_rks_dsts in rt_rks_dsts_list {
-                    if let Some(rt_rks) = &rt_rks_dsts.rks {
-                        for rt_rk in rt_rks {
-                            if msg_rks.contains(rt_rk) {
-                                return Some(&rt_rks_dsts.dsts);
-                            }
-                        }
-                    } else {
-                        /* no routing keys == no match */
+                    if rt_rks_dsts.rks.is_empty() {
                         continue;
+                    }
+
+                    let rt_rks = &rt_rks_dsts.rks;
+                    for rt_rk in rt_rks {
+                        if msg_rks.contains(rt_rk) {
+                            return Some(&rt_rks_dsts.dsts);
+                        }
                     }
                 }
                 None
@@ -196,89 +195,97 @@ struct RouterCtx {
     pub connections: HashMap<String, RegisterConnectionReq>,
 
     /// the router configuration, as read from the config file
-    pub route_config: RouteConfig,
+    pub routes: Vec<Route>,
 
     /// a map of message types and their respective destinations
     pub routes_map: HashMap<String, Vec<RksDsts>>,
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq)]
-struct RouteSrc {
-    pub app: String, //application name
-    pub types: Option<Vec<String>>, //the message types to route
-    pub rks: Option<Vec<String>>,
-}
-
-#[derive(Serialize, Deserialize, Eq, PartialEq)]
-struct Route {
-    pub src: RouteSrc,
-    pub dst: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Eq, PartialEq)]
-struct RouteConfig {
-    pub routes: Vec<Route>,
-}
-
-async fn read_config(workflow_base_dir: String) -> Result<RouteConfig, Box<dyn Error>> {
-    let path = format!("{}/routes.yaml", &workflow_base_dir);
-    let mut f = File::open(&path).await?;
-
-    let mut contents = String::new();
-    f.read_to_string(&mut contents).await?;
-    let routes: RouteConfig = serde_yaml::from_str(&contents)?;
-    Ok(routes)
-}
-
 #[derive(Debug)]
 struct RksDsts {
-    /// Routing keys
-    pub rks: Option<Vec<String>>,
+    /// Routing keys. empty means allow everything
+    pub rks: Vec<String>,
 
     /// Destinations
     pub dsts: Vec<String>,
 }
 
+///checks if rks (all items in the array) are found in  rks_dsts.rks.
+/// if found, the relevant item is returned, else None is returned
+fn __find_existing_rks_dsts<'a>(rks: &[String], rks_dsts: &'a mut [RksDsts]) -> Option<&'a mut RksDsts> {
+    /*
+        add the destination to an item with matching route keys,
+        or create a new item
+     */
+    for rk_dst in rks_dsts {
+        if rks.len() != rk_dst.rks.len() {
+            return None;
+        }
+
+        /* compare all routing keys, irrespective of order */
+
+        /* put all items of one array into a map */
+        let mut map = HashMap::new();
+        for existing_rk in &rk_dst.rks {
+            map.insert(existing_rk.clone(), existing_rk.clone());
+        }
+
+        /* check all items of the second array are in the map */
+        let mut found = true;
+        for rk in rks {
+            if !map.contains_key(rk) {
+                found = false;
+                break;
+            }
+        }
+
+        if found {
+            return Some(rk_dst);
+        }
+    }
+
+    None
+}
+
 fn __add_to_routes_map(route_key: &str,
                        routes_map: &mut HashMap<String, Vec<RksDsts>>,
-                       rks: &Option<Vec<String>>,
-                       dsts: Vec<String>) {
-    let rks_opt = if let Some(r) = rks {
-        Some(r.clone())
-    } else {
-        None
-    };
-
+                       rks: Vec<String>,
+                       dst: &str) {
     if routes_map.contains_key(route_key) {
         let rks_dsts = routes_map.get_mut(route_key).unwrap();
-        rks_dsts.push(RksDsts {
-            rks: rks_opt,
-            dsts,
-        });
+        let existing_opt = __find_existing_rks_dsts(&rks, rks_dsts);
+        if let Some(rk_dst) = existing_opt {
+            /* append */
+            rk_dst.dsts.push(dst.to_string());
+        } else {
+            /* create new */
+            rks_dsts.push(RksDsts {
+                rks: rks.clone(),
+                dsts: vec![dst.to_string()],
+            })
+        }
     } else {
         /* insert new */
         routes_map.insert(route_key.to_string(), vec![RksDsts {
-            rks: rks_opt,
-            dsts,
+            rks,
+            dsts: vec![dst.to_string()],
         }]);
     }
 }
 
-/// Convert routes into key=="name/message_type" and val=={\[rks],\[dst]}
-/// The special source \[stdin] and the special dst \[stdout]
-/// link the the route to stdin/stdout
-async fn preprocess_routes(route_config: &RouteConfig) -> HashMap<String, Vec<RksDsts>> {
+/// Convert routes into key=="instance_id/message_type" and val=={\[rks],\[dst]}
+async fn preprocess_routes(routes: &[Route]) -> HashMap<String, Vec<RksDsts>> {
     let mut routes_map = HashMap::new();
-    for route in &route_config.routes {
-        if let Some(types) = &route.src.types {
-            for t in types {
-                let route_key = format!("{}/{}", route.src.app, t);
-                __add_to_routes_map(&route_key, &mut routes_map, &route.src.rks, route.dst.clone());
-            }
-        } else {
+    for route in routes {
+        if route.src.msg_types.is_empty() {
             /* applicable for all types */
-            let route_key = format!("{}/*", route.src.app);
-            __add_to_routes_map(&route_key, &mut routes_map, &route.src.rks, route.dst.clone());
+            let route_key = format!("{}/*", route.src.instance_id);
+            __add_to_routes_map(&route_key, &mut routes_map, route.src.routing_keys.clone(), &route.dst);
+        } else {
+            for t in &route.src.msg_types {
+                let route_key = format!("{}/{}", route.src.instance_id, t);
+                __add_to_routes_map(&route_key, &mut routes_map, route.src.routing_keys.clone(), &route.dst);
+            }
         }
     }
 
@@ -304,25 +311,20 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>)
             }
         }
     }
-    
+
     Ok(msgs)
 }
 
 pub async fn router_main(base_dir: String,
+                         a_cfg: Arc<Config>,
                          ctrl_rx: Receiver<RouterControlMessages>,
                          conn_rx: Receiver<Message>,
                          am_must_die: Arc<RwLock<bool>>) {
-    let routes_res = read_config(base_dir.clone()).await;
-    if let Err(e) = routes_res {
-        error!("Error loading routes: {}", &e);
-        exit(1);
-    }
-    let route_config = routes_res.unwrap();
-    let routes_map = preprocess_routes(&route_config).await;
+    let routes_map = preprocess_routes(&a_cfg.routes).await;
 
     let mut ctx = RouterCtx {
         connections: HashMap::new(),
-        route_config,
+        routes: a_cfg.routes.clone(),
         routes_map,
     };
 

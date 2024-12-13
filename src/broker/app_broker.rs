@@ -14,12 +14,13 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::broker::auth::{authenticate};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
-use crate::broker::broker::Actions::{MustDisconnect, NoAction};
-use crate::broker::broker::States::{Authenticate, Process, Register};
+use crate::broker::app_broker::Actions::{MustDisconnect, NoAction};
+use crate::broker::app_broker::States::{Authenticate, Process, Register};
 use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
 use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
 use crate::broker::router::router_main;
+use crate::config::config::Config;
 use crate::error::{raderr};
 use crate::utils::timer::Timer;
 use crate::utils::utils;
@@ -370,14 +371,15 @@ async fn process_connection(mut sock: TcpStream,
 }
 
 ///start the broker, which includes the socket listener, router, and control plane
-pub async fn broker_main(base_dir: String,
-                         cfg: BrokerConfig,
+pub async fn start_broker(base_dir: String,
+                         a_cfg: Arc<Config>,
                          am_must_die: Arc<RwLock<bool>>)
                          -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
     tokio::spawn(router_main(base_dir,
+                             a_cfg.clone(),
                              router_ctrl_rx,
                              router_conn_rx,
                              am_must_die.clone()));
@@ -385,7 +387,7 @@ pub async fn broker_main(base_dir: String,
     let (ctrl_tx, ctrl_rx) = channel(32);
     tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone(), am_must_die.clone()));
 
-    let listener = TcpListener::bind(&cfg.bind_addr).await?;
+    let listener = TcpListener::bind(&a_cfg.broker.bind_addr).await?;
     loop {
         let mut must_sleep = false;
         select! {

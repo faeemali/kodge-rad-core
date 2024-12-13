@@ -3,8 +3,8 @@ use std::error::Error;
 use std::process::exit;
 use std::sync::Arc;
 use tokio::sync::{RwLock};
-use log::{error, info, warn};
-use crate::broker::broker::{broker_main, BrokerConfig};
+use log::{info, warn};
+use crate::broker::app_broker::{start_broker, BrokerConfig};
 use crate::config::config::{Config};
 use crate::utils::utils::set_must_die;
 
@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let runtime_config = args[2].to_string();
 
     let config = Config::load(&runtime_config)?;
+    let a_config = Arc::new(config);
 
     log4rs::init_file(format!("{}/log_conf.yaml", base_dir), Default::default())?;
 
@@ -51,25 +52,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("base_dir: {}", base_dir);
     let am_must_die = Arc::new(RwLock::new(false));
 
-    let app_ctx = AppCtx {
-        base_dir: base_dir.to_string(),
-        must_die: am_must_die.clone(),
-        config: config.clone(),
-    };
-
     let am_must_die_clone = am_must_die.clone();
     ctrlc_async::set_async_handler(handle_signal(am_must_die_clone))?;
 
-    let handle = tokio::spawn(broker_main(base_dir.to_string(),
-                             BrokerConfig::new(config.broker.bind_addr.clone()),
-                             am_must_die.clone(),
-    ));
-
-    let res = tokio::join!(handle);
-    if let Err(e) = &res.0 {
-        error!("Error joining with broker: {}", e);
-        exit(1);
-    }
+    start_broker(base_dir.to_string(), a_config, am_must_die).await?;
 
     info!("Main app exiting");
     exit(0);
