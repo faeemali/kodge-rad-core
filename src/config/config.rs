@@ -4,6 +4,7 @@ use std::fs::File;
 use serde::{Deserialize, Serialize};
 use crate::broker::broker::BrokerConfig;
 use crate::error::raderr;
+use crate::utils::utils::TokenType::Name;
 use crate::utils::utils::Validation;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -72,8 +73,8 @@ impl Config {
         let mut map: HashMap<String, String> = HashMap::new();
         let split = instance.split(",").collect::<Vec<&str>>();
         for s in split {
-            if !Validation::is_valid_instance(s) {
-                return raderr(format!("Invalid instance id detected in instance string: {}", instance));
+            if !Validation::is_valid_instance_suffix(s) {
+                return raderr(format!("Invalid instance suffix detected in instance string: {}", instance));
             }
 
             if map.contains_key(s) {
@@ -100,35 +101,26 @@ impl Config {
         apps.iter().any(|a| a.instance_id == instance_id)
     }
 
-    ///splits a comma separated list of variables into a vec and returns
-    fn get_variables_from_list(vars: &str) -> Result<Vec<String>, Box<dyn Error + Sync + Send>> {
-        let split = vars.split(",").collect::<Vec<&str>>();
-        let mut res = vec![];
-        for v in split {
-            if !Validation::is_valid_variable(v) {
-                return raderr(format!("Invalid variable found ({}) in {}", v, vars));
-            }
-
-            res.push(v.to_string());
-        }
-
-        Ok(res)
-    }
-
     fn process_msg_types(msg_types: &str) -> Result<Vec<String>, Box<dyn Error + Sync + Send>> {
         if !msg_types.starts_with('(') || !msg_types.ends_with(')') {
             return raderr(format!("Invalid message types format for: {}", msg_types));
         }
 
         let mts = &msg_types[1..msg_types.len() - 1];
-        let types = Self::get_variables_from_list(mts)?;
+        let types = Validation::get_tokens_from_list(mts, Name)?;
         Ok(types)
     }
 
     fn process_route_src(src: &str, apps: &[App]) -> Result<RouteSrc, Box<dyn Error + Sync + Send>> {
-        let split = src.split(&[' ', '\t'][..]).collect::<Vec<&str>>();
+        let mut split = src.split(&[' ', '\t'][..]).collect::<Vec<&str>>();
         if split.is_empty() {
             return raderr(format!("No route src found in source: {}", src));
+        }
+
+        //if the item contains spaces, then split will have "" as the last item
+        let last = split[split.len() - 1];
+        if last.is_empty() {
+            split.pop();
         }
 
         if !Self::instance_id_exists(split[0], apps) {
@@ -153,7 +145,7 @@ impl Config {
                 ))
             } else {
                 /* we have routing keys */
-                let routing_keys = Self::get_variables_from_list(&split[1])?;
+                let routing_keys = Validation::get_tokens_from_list(&split[1], Name)?;
                 Ok(RouteSrc::new(
                     split[0].to_string(),
                     vec![],
@@ -163,7 +155,7 @@ impl Config {
         } else if split.len() == 3 {
             /* we have msg_types and routing keys */
             let msg_types = Self::process_msg_types(&split[1])?;
-            let routing_keys = Self::get_variables_from_list(&split[2])?;
+            let routing_keys = Validation::get_tokens_from_list(&split[2], Name)?;
             Ok(RouteSrc::new(
                 split[0].to_string(),
                 msg_types,
@@ -196,8 +188,10 @@ impl Config {
             return raderr(format!("Invalid routing item format for {}", routing_raw));
         }
 
-        let src = Config::process_route_src(split[0], apps)?;
-        let dsts = Self::get_variables_from_list(split[1])?;
+        let src = split[0].trim();
+        let dst = split[1].trim();
+        let src = Config::process_route_src(src, apps)?;
+        let dsts = Validation::get_tokens_from_list(dst, Name)?;
 
         let mut ret = vec![];
         for dst in &dsts {

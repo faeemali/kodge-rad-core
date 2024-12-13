@@ -7,6 +7,7 @@ use base64::DecodeError;
 use base64::prelude::*;
 use serde::de::DeserializeOwned;
 use tokio::sync::{RwLock};
+use crate::error::raderr;
 use crate::utils::utils::TokenType::{Name, Variable, Version};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
@@ -51,8 +52,16 @@ pub const MAX_VERSION_LEN: usize = 16;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum TokenType {
+    //alphanumeric, -,_,. allowed. Must start with letter and end
+    //with alphanumeric
     Name,
+
+    //alphanumeric, _ allowed. Must start with letter and end with
+    //alphanumeric
     Variable,
+
+    //same chars as name. must start with alphanumeric. must end with
+    //alphanumeric
     Version,
 }
 
@@ -61,7 +70,7 @@ pub struct Validation {}
 impl Validation {
     //alphanumeric, dash, underscore allowed
     pub fn is_valid_name_char(c: char) -> bool {
-        c.is_alphanumeric() || c == '-' || c == '_'
+        c.is_alphanumeric() || c == '-' || c == '_' || c == '.'
     }
 
     pub fn is_valid_variable_char(c: char) -> bool {
@@ -69,7 +78,7 @@ impl Validation {
     }
 
     pub fn is_valid_version_char(c: char) -> bool {
-        c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
+        Self::is_valid_name_char(c)
     }
 
     ///checks if a name is valid. Names must be alphanumeric and contain
@@ -96,14 +105,24 @@ impl Validation {
             }
         }
 
-        if !nb[0].is_alphabetic() {
-            return false;
+        match token_type {
+            Name | Variable  => {
+                if !nb[0].is_alphabetic() {
+                    return false;
+                }
+            }
+
+            Version => {
+                if !nb[0].is_alphanumeric() {
+                    return false;
+                }
+            }
         }
 
         if !nb[nb.len() - 1].is_alphanumeric() {
             return false;
         }
-
+        
         true
     }
 
@@ -124,7 +143,51 @@ impl Validation {
         Validation::is_valid_token(ver, Version)
     }
 
-    pub fn is_valid_instance(instance: &str) -> bool {
-        Validation::is_valid_variable(instance)
+    ///checks if a full instance id is valid
+    pub fn is_valid_instance_id(instance: &str) -> bool {
+        Validation::is_valid_name(instance)
+    }
+
+    ///checks if just the suffix of an instance id is valid. This may
+    /// start with a - or . or _ for example
+    pub fn is_valid_instance_suffix(instance: &str) -> bool {
+        let chars: Vec<char> = instance.chars().collect();
+        for c in chars {
+            if !Self::is_valid_name_char(c) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    ///splits a comma separated list of variables into a vec and returns
+    pub fn get_tokens_from_list(vars: &str, token_type: TokenType) -> Result<Vec<String>, Box<dyn Error + Sync + Send>> {
+        let split = vars.split(",").collect::<Vec<&str>>();
+        let mut res = vec![];
+        for v in split {
+            match token_type {
+                Name => {
+                    if !Validation::is_valid_name(v) {
+                        return raderr(format!("Invalid name found ({}) in {}", v, vars));
+                    }
+                }
+                Variable => {
+                    if !Validation::is_valid_variable(v) {
+                        return raderr(format!("Invalid variable found ({}) in {}", v, vars));
+                    }
+                }
+                Version => {
+                    if !Validation::is_valid_version(v) {
+                        return raderr(format!("Invalid version found ({}) in {}", v, vars));
+                    }
+                }
+            }
+
+
+            res.push(v.to_string());
+        }
+
+        Ok(res)
     }
 }
