@@ -102,12 +102,7 @@ impl Config {
     }
 
     fn process_msg_types(msg_types: &str) -> Result<Vec<String>, Box<dyn Error + Sync + Send>> {
-        if !msg_types.starts_with('(') || !msg_types.ends_with(')') {
-            return raderr(format!("Invalid message types format for: {}", msg_types));
-        }
-
-        let mts = &msg_types[1..msg_types.len() - 1];
-        let types = Validation::get_tokens_from_list(mts, Name)?;
+        let types = Validation::get_tokens_from_list(msg_types, Name)?;
         Ok(types)
     }
 
@@ -127,35 +122,23 @@ impl Config {
             return raderr(format!("Invalid route src found in source. Instance ID ({}) not found. Route: {}", split[0], src));
         }
 
-        if split.len() == 1 {
-            /* we have only instance id */
+        let len = split.len();
+        if len != 2 && len != 3 {
+            return raderr(format!("Invalid format when processing routing src. Expected 2 or 3 token. src={}", src));
+        }
+
+        if len == 2 {
+            /* we have instance_id and message types */
+            let msg_types = Self::process_msg_types(split[1])?;
             Ok(RouteSrc::new(
                 split[0].to_string(),
+                msg_types,
                 vec![],
-                vec![]))
-        } else if split.len() == 2 {
-            /* we have either message types or routing keys */
-            if split[1].starts_with('(') {
-                /* we have message types */
-                let msg_types = Self::process_msg_types(&split[1])?;
-                Ok(RouteSrc::new(
-                    split[0].to_string(),
-                    msg_types,
-                    vec![],
-                ))
-            } else {
-                /* we have routing keys */
-                let routing_keys = Validation::get_tokens_from_list(&split[1], Name)?;
-                Ok(RouteSrc::new(
-                    split[0].to_string(),
-                    vec![],
-                    routing_keys,
-                ))
-            }
-        } else if split.len() == 3 {
+            ))
+        } else if len == 3 {
             /* we have msg_types and routing keys */
-            let msg_types = Self::process_msg_types(&split[1])?;
-            let routing_keys = Validation::get_tokens_from_list(&split[2], Name)?;
+            let msg_types = Self::process_msg_types(split[1])?;
+            let routing_keys = Validation::get_tokens_from_list(split[2], Name)?;
             Ok(RouteSrc::new(
                 split[0].to_string(),
                 msg_types,
@@ -171,15 +154,14 @@ impl Config {
     /// `echo-0 (string, MyRecord) key1,key2 -> kafka-1,rabbit-1`
     ///
     /// The format is:
-    /// `src_app_instance_id (message_types) routing_keys -> dst_app_instance_ids`
+    /// `src_app_instance_id message_types routing_keys -> dst_app_instance_ids`
     /// where:
     /// - src_app_instance_id is the source application instance id (from the apps section)
-    /// - message types are optional, and if specified must be a comma
-    ///   separated message type strings in round brackets. If not specified,
-    ///   defaults to [] which means allow all message types
+    /// - message types are required, and must be a comma
+    ///   separated message type strings.
     /// - routing_keys are optional, and if specified must be a comma
     ///   separated list of routing keys. If not specified, defaults to []
-    ///   which means allow any/all routing keys
+    ///   which means messages with routing keys will not match with this route
     /// - dst_app_instance_ids must be a comma separated list of destination app
     ///   instance ids, as specified in the apps section
     fn process_routing_item(routing_raw: &str, apps: &[App]) -> Result<Vec<Route>, Box<dyn Error + Sync + Send>> {

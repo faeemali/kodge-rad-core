@@ -163,7 +163,13 @@ impl Validation {
 
     ///splits a comma separated list of variables into a vec and returns
     pub fn get_tokens_from_list(vars: &str, token_type: TokenType) -> Result<Vec<String>, Box<dyn Error + Sync + Send>> {
-        let split = vars.split(",").collect::<Vec<&str>>();
+        let mut split = vars.split(",").collect::<Vec<&str>>();
+        
+        //if there's only one item, split() sets the last item to "", so remove it
+        if split[split.len()-1].is_empty() {
+            split.pop();
+        }
+        
         let mut res = vec![];
         for v in split {
             match token_type {
