@@ -154,7 +154,7 @@ impl Protocol {
                         }
 
                         let msg_header = msg_header_res.unwrap();
-                        if !Validation::is_valid_variable(&msg_header.name) || !Validation::is_valid_msg_type(&msg_header.msg_type) {
+                        if !Validation::is_valid_name(&msg_header.name) || !Validation::is_valid_msg_type(&msg_header.msg_type) {
                             debug!("Invalid message name or type (protocol)");
                             self.reset();
                             continue;

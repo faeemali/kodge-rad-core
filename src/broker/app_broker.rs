@@ -246,6 +246,10 @@ async fn process_connection(mut sock: TcpStream,
                     //debug!("Broker: read {} bytes", n);
                     busy = true;
                     let msgs = conn_ctx.protocol.feed(&data);
+                    if msgs.is_empty() {
+                        continue;
+                    }
+                    
                     //debug!("broker: after feed: num messages = {}", msgs.len());
                     if !registered {
                         match register_connection(&mut conn_ctx, msgs.clone()).await {

@@ -127,7 +127,7 @@ impl Validation {
     }
 
     pub fn is_valid_msg_type(msg_type: &str) -> bool {
-        Validation::is_valid_token(msg_type, Variable)
+        Validation::is_valid_token(msg_type, Name)
     }
 
     #[allow(dead_code)]
