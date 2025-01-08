@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock};
 use log::{info, warn};
 use crate::broker::app_broker::{start_broker, BrokerConfig};
-use crate::client::apps::get_manifests;
+use crate::client::apps::{get_manifests, show_manifest_summary};
 use crate::config::config::{Config};
 use crate::utils::utils::{get_system_info, set_must_die, SystemInfo};
 
@@ -40,7 +40,7 @@ async fn process_commands(app_ctx: Arc<AppCtx>, opts: &[String]) -> Result<(), B
     match opts[0].as_str() {
         "list" => {
             let manifests = get_manifests(app_ctx.clone()).await?;
-            println!("{:#?}", manifests);
+            show_manifest_summary(manifests);
         }
         _ => {
             return Err("Unknown command".into());

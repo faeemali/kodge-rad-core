@@ -45,3 +45,22 @@ pub async fn get_manifests(app_ctx: Arc<AppCtx>) -> Result<Vec<AppItem>, Box<dyn
     let items = resp.json::<Vec<AppItem>>().await?;
     Ok(items)
 }
+
+pub fn show_manifest_summary(apps: Vec<AppItem>) {
+    let mut version = "";
+    let mut code = 0u64;
+    let mut summary = "";
+    (0..apps.len()).for_each(|i| {
+        let app = &apps[i];
+        app.manifests.iter().for_each(|manifest| {
+           if manifest.version_code > code {
+               code = manifest.version_code;
+               version = manifest.version_name.as_str();
+               summary = manifest.summary.as_str();
+           } 
+        });
+        
+        let version_info = format!("[{}, ({})]", version, apps[i].manifests.len());
+        println!("{}. {:<15} {:<10} - {:<40}", i + 1, app.name, version_info, summary);
+    })
+}
