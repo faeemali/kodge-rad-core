@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+use crate::AppCtx;
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Config, Route};
 use crate::error::{raderr};
@@ -315,23 +316,21 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>)
     Ok(msgs)
 }
 
-pub async fn router_main(base_dir: String,
-                         a_cfg: Arc<Config>,
+pub async fn router_main(app_ctx: Arc<AppCtx>,
                          ctrl_rx: Receiver<RouterControlMessages>,
-                         conn_rx: Receiver<Message>,
-                         am_must_die: Arc<RwLock<bool>>) {
-    let routes_map = preprocess_routes(&a_cfg.routes).await;
+                         conn_rx: Receiver<Message>) {
+    let routes_map = preprocess_routes(&app_ctx.config.routes).await;
 
     let mut ctx = RouterCtx {
         connections: HashMap::new(),
-        routes: a_cfg.routes.clone(),
+        routes: app_ctx.config.routes.clone(),
         routes_map,
     };
 
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
-        if utils::get_must_die(am_must_die.clone()).await {
+        if utils::get_must_die(app_ctx.must_die.clone()).await {
             warn!("Router caught must die flag. Aborting");
             return;
         }
@@ -371,5 +370,5 @@ pub async fn router_main(base_dir: String,
     }
 
     error!("Router error detected. Aborting");
-    utils::set_must_die(am_must_die).await;
+    utils::set_must_die(app_ctx.must_die.clone()).await;
 }

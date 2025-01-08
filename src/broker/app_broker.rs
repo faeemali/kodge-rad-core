@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+use crate::AppCtx;
 use crate::broker::auth::{authenticate};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::app_broker::Actions::{MustDisconnect, NoAction};
@@ -375,23 +376,19 @@ async fn process_connection(mut sock: TcpStream,
 }
 
 ///start the broker, which includes the socket listener, router, and control plane
-pub async fn start_broker(base_dir: String,
-                         a_cfg: Arc<Config>,
-                         am_must_die: Arc<RwLock<bool>>)
+pub async fn start_broker(app_ctx: Arc<AppCtx>)
                          -> Result<(), Box<dyn Error + Sync + Send>> {
     let (router_ctrl_tx, router_ctrl_rx) = channel(32);
     let (router_conn_tx, router_conn_rx) = channel(32);
 
-    tokio::spawn(router_main(base_dir,
-                             a_cfg.clone(),
+    tokio::spawn(router_main(app_ctx.clone(),
                              router_ctrl_rx,
-                             router_conn_rx,
-                             am_must_die.clone()));
+                             router_conn_rx));
 
     let (ctrl_tx, ctrl_rx) = channel(32);
-    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone(), am_must_die.clone()));
+    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone(), app_ctx.must_die.clone()));
 
-    let listener = TcpListener::bind(&a_cfg.broker.bind_addr).await?;
+    let listener = TcpListener::bind(&app_ctx.config.broker.bind_addr).await?;
     loop {
         let mut must_sleep = false;
         select! {
@@ -399,17 +396,17 @@ pub async fn start_broker(base_dir: String,
                 if let Err(e) = &res {
                     let msg = format!("Error accepting connection: {}. Aborting", &e);
                     error!("{}", msg);
-                    utils::set_must_die(am_must_die.clone()).await;
+                    utils::set_must_die(app_ctx.must_die.clone()).await;
                 }
                 let (sock, addr) = res.unwrap();
                         tokio::spawn(process_connection(sock,
                                         addr,
                                         ctrl_tx.clone(), //for sending messages to the control plane
                                         router_conn_tx.clone(),
-                                        am_must_die.clone())); //for sending messages to the router
+                                        app_ctx.must_die.clone())); //for sending messages to the router
             }
 
-            must_die = utils::get_must_die(am_must_die.clone()) => {
+            must_die = utils::get_must_die(app_ctx.must_die.clone()) => {
                 if must_die {
                     warn!("Broker caught must die flag. Aborting");
                     return Ok(());

@@ -9,6 +9,7 @@ use crate::utils::utils::Validation;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConfigRaw {
+    pub server: Server,
     pub broker: BrokerConfig,
     pub apps: Vec<String>,
     pub routing: Vec<String>,
@@ -58,11 +59,17 @@ impl App {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Server {
+    pub addr: String,
+}
+
 pub const VERSION_DEFAULT: &str = "latest";
 pub const INSTANCE_DEFAULT: &str = "0";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
+    pub server: Server,
     pub broker: BrokerConfig,
     pub apps: Vec<App>,
     pub routes: Vec<Route>,
@@ -298,6 +305,7 @@ impl Config {
         }
 
         Ok(Config {
+            server: raw.server.clone(),
             broker: raw.broker.clone(),
             apps,
             routes,

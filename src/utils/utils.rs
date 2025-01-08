@@ -197,3 +197,29 @@ impl Validation {
         Ok(res)
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct SystemInfo {
+    pub os: String,
+    pub arch: String,
+}
+
+impl SystemInfo {
+    pub fn get_system_string(&self) -> String {
+        format!("{}/any/{}", self.os, self.arch)
+    }
+    
+    pub fn get_url_encoded_system_string(&self) -> String {
+        let system = self.get_system_string();
+        urlencoding::encode(&system).to_string()
+    }
+}
+
+pub fn get_system_info() -> SystemInfo {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    SystemInfo {
+        os: os.to_string(),
+        arch: arch.to_string(),
+    }
+}

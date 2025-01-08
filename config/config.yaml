@@ -1,5 +1,7 @@
 #note: this config file does NOT need to be in the config directory
 #it can be anywhere
+server:
+  addr: "http://localhost:8080"
 broker:
   bind_addr: "0.0.0.0:8888"
 apps:
