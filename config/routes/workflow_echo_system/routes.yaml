@@ -1,9 +1,0 @@
-routes:
-  - src:
-      app: "stdin"
-    dst:
-      - cntr1
-  - src:
-      app: cntr1
-    dst:
-      - "stdout"

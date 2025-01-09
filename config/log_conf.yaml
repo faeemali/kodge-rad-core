@@ -21,7 +21,7 @@ root:
   level: debug
   appenders:
     - stdout
-    - file
+#    - file
 
 loggers:
   file:

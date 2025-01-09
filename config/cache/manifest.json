@@ -1,0 +1,24 @@
+[
+  {
+    "name": "echo",
+    "app-info": [
+      {
+        "manifest": {
+          "name": "echo",
+          "summary": "echoes all received data",
+          "description": "expects string messages only. All received data is transmitted unmodified",
+          "version-name": "0.0.1",
+          "version-code": 1,
+          "usage": "echo",
+          "rx-types": [
+            "string"
+          ],
+          "tx-types": [
+            "string"
+          ]
+        },
+        "checksum": "39343032653338653234326566336532666562346435663866373736323635656564663738643966626130363261363738303834653238323466643831666366"
+      }
+    ]
+  }
+]

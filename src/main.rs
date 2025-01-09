@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock};
 use log::{info, warn};
 use crate::broker::app_broker::{start_broker, BrokerConfig};
-use crate::client::apps::{get_manifests, show_manifest_summary};
+use crate::client::apps::{update_manifest, init_cache, show_manifest_summary, read_manifest};
 use crate::config::config::{Config};
 use crate::utils::utils::{get_system_info, set_must_die, SystemInfo};
 
@@ -28,7 +28,9 @@ fn show_help(app_name: &str) {
     /* TODO: make <config_dir> something like ${HOME}/.rad by default */
     println!("Usage: {} <config_dir> <config_file> [options]", app_name);
     println!("Options:");
+    println!("  update           Retrieves and saves the latest app information");
     println!("  list             Lists a summary of all available applications");
+    println!("  get              Downloads all apps for the specified workflow");
 }
 
 async fn handle_signal(app_ctx: Arc<AppCtx>) {
@@ -38,15 +40,25 @@ async fn handle_signal(app_ctx: Arc<AppCtx>) {
 
 async fn process_commands(app_ctx: Arc<AppCtx>, opts: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
     match opts[0].as_str() {
+        "update" => {
+            update_manifest(app_ctx.clone()).await?;
+            info!("manifest updated");            
+        }
+        
         "list" => {
-            let manifests = get_manifests(app_ctx.clone()).await?;
+            let manifests = read_manifest(app_ctx.clone()).await?;
             show_manifest_summary(manifests);
         }
+        
+        "get" => {
+            
+        }
+        
         _ => {
             return Err("Unknown command".into());
         }
     }
-    
+
     Ok(())
 }
 
@@ -73,6 +85,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         system_info: get_system_info(),
     };
     let a_app_ctx = Arc::new(app_ctx);
+    
+    init_cache(a_app_ctx.clone())?;
 
     if args.len() > 3 {
         process_commands(a_app_ctx.clone(), &args[3..]).await?;

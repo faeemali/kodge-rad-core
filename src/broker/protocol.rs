@@ -3,7 +3,7 @@ use std::time::Duration;
 use log::{debug};
 use serde::{Deserialize, Serialize};
 use crate::broker::protocol::States::{GetBody, GetCrc, GetFooter, GetHeader, GetMessageHeader};
-use crate::config::config_common::KVPair;
+use crate::utils::types::KVPair;
 use crate::error::RadError;
 use crate::utils::crc::{crc16, crc16_for_byte};
 use crate::utils::timer::Timer;
