@@ -6,7 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 use base64::DecodeError;
 use base64::prelude::*;
+use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
+use tar::Archive;
 use tokio::sync::{RwLock};
 use crate::error::raderr;
 use crate::utils::utils::TokenType::{Name, Variable, Version};
@@ -250,6 +252,32 @@ pub fn clean_directory(path: &str) -> io::Result<()> {
             "Specified path is not a directory or does not exist",
         ));
     }
+
+    Ok(())
+}
+
+/// Extracts a `.tar.gz` archive into the specified output directory.
+/// AI generated
+///
+/// # Arguments
+/// - `archive_path` - Path to the `.tar.gz` archive file.
+/// - `output_path` - Path to the directory where the archive contents should be extracted.
+///
+/// # Returns
+/// - `Ok(())` on success.
+/// - `Err(io::Error)` on failure.
+pub fn extract_tar_gz(archive_path: &str, output_path: &str) -> io::Result<()> {
+    // Open the `.tar.gz` file
+    let archive_file = File::open(archive_path)?;
+
+    // Create a GzDecoder to decompress the file
+    let decompressed = GzDecoder::new(archive_file);
+
+    // Create a tar Archive to handle the decompressed data
+    let mut archive = Archive::new(decompressed);
+
+    // Extract the archive into the output directory
+    archive.unpack(output_path)?;
 
     Ok(())
 }

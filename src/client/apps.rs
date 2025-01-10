@@ -12,6 +12,7 @@ use crate::AppCtx;
 use crate::config::config::App;
 use crate::utils::utils;
 use tokio;
+use crate::utils::utils::{clean_directory, extract_tar_gz};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ManifestItem {
@@ -240,9 +241,8 @@ async fn app_exists_in_cache(app_ctx: Arc<AppCtx>, app: &App, version_code: u64)
 }
 
 const DOWNLOAD_FILENAME: &str = "download.tar.gz";
-pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, cache_checksum: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let tmp_dir = format!("{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_TMP_DIR_NAME);
-    utils::clean_directory(&tmp_dir)?;
+pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_checksum: &str) -> Result<Option<String>, Box<dyn Error + Sync + Send>> {
+    clean_directory(&tmp_dir)?;
 
     let system = utils::get_system_info().get_url_encoded_system_string();
     let url = format!("{}/rest/get-app?system={}&app={}&checksum={}&version={}",
@@ -255,11 +255,11 @@ pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, cache_checksum: &str)
 
     if response.status() == reqwest::StatusCode::NO_CONTENT {
         info!("Download not required for {}", &app.name);
-        return Ok(())
+        return Ok(None)
     }
 
     // Check if the response status is success
-    if response.status().is_success() {
+    let filename = if response.status().is_success() {
         // Get the response body as a stream
         let mut content = response.bytes_stream();
 
@@ -273,11 +273,13 @@ pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, cache_checksum: &str)
             file.write_all(&chunk)?;
         }
         info!("App {} downloaded successfully", output_path);
+
+        output_path
     } else {
         return Err(format!("Download failed. Status={}", response.status()).into());
-    }
+    };
 
-    Ok(())
+    Ok(Some(filename))
 }
 
 const APP_VERSION_LATEST: &str = "latest";
@@ -298,10 +300,27 @@ pub async fn get_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<(), Box<dyn Erro
         }
     };
 
-    if manifest_checksum != cache_checksum {
-        download_app(app_ctx.clone(), app, &cache_checksum).await?;
-    } else {
+    if manifest_checksum == cache_checksum {
         //looks like we already have the app. no need to download anything
+        return Ok(())
+    }
+
+    let tmp_dir = format!("{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_TMP_DIR_NAME);
+    let filename_opt = download_app(app_ctx.clone(), app, &tmp_dir, &cache_checksum).await?;
+    if let Some(downloaded_filename) = filename_opt {
+        /* create the app + version directory */
+        let app_dir = format!("{}/{}/{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_APPS_DIR_NAME, &app.name, version_code);
+        create_cache_dir(&app_dir)?;
+
+        extract_tar_gz(&downloaded_filename, &app_dir)?;
+
+        /* cleanup */
+        clean_directory(&tmp_dir)?;
+    } else {
+        /*
+            nothing was downloaded because there was nothing to download.
+            But there was no error.
+         */
     }
 
     Ok(())
@@ -312,8 +331,8 @@ pub async fn get_apps(app_ctx: Arc<AppCtx>) -> Result<(), Box<dyn Error + Sync +
     let mut map = HashMap::new();
     for app in &app_ctx.config.apps {
         map.insert(app.name.clone(), app.clone());
-    } 
-    
+    }
+
     for app in map.values() {
         get_app(app_ctx.clone(), app).await?;
     }

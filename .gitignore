@@ -7,3 +7,4 @@ output
 config/logs/*
 logs/*
 config/cache/tmp/*
+config/cache/apps/*
