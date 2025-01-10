@@ -15,7 +15,11 @@
           ],
           "tx-types": [
             "string"
-          ]
+          ],
+          "execution": {
+            "cmd": "echo",
+            "args": null
+          }
         },
         "checksum": "9402e38e242ef3e2feb4d5f8f776265eedf78d9fba062a678084e2824fd81fcf"
       }

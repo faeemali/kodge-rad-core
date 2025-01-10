@@ -15,6 +15,12 @@ use tokio;
 use crate::utils::utils::{calculate_sha256, clean_directory, extract_tar_gz};
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct Execution {
+    pub cmd: String,
+    pub args: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ManifestItem {
     pub name: String,
     pub summary: String,
@@ -36,6 +42,7 @@ pub struct ManifestItem {
     pub rx_types: Vec<String>,
     #[serde(rename = "tx-types")]
     pub tx_types: Vec<String>,
+    pub execution: Execution,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
