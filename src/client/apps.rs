@@ -12,7 +12,7 @@ use crate::AppCtx;
 use crate::config::config::App;
 use crate::utils::utils;
 use tokio;
-use crate::utils::utils::{clean_directory, extract_tar_gz};
+use crate::utils::utils::{calculate_sha256, clean_directory, extract_tar_gz};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ManifestItem {
@@ -229,19 +229,30 @@ fn get_app_checksum(path: &str) -> Result<String, Box<dyn Error + Sync + Send>> 
 //checks if the app exists in the cache i.e. the actual files exist.
 //This does not just look at the manifest. On success, the checksum of the
 //app is returned
-async fn app_exists_in_cache(app_ctx: Arc<AppCtx>, app: &App, version_code: u64) -> Result<Option<String>, Box<dyn Error + Sync + Send>> {
+fn app_exists_in_cache(app_ctx: Arc<AppCtx>, app: &App, version_code: u64) -> Option<String> {
     let base_app_path = format!("{}/{}/{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_APPS_DIR_NAME, app.name, version_code);
     let path = Path::new(&base_app_path);
     if !path.exists() {
-        return Ok(None);
+        return None;
     }
 
-    let checksum = get_app_checksum(&base_app_path)?;
-    Ok(Some(checksum))
+    match get_app_checksum(&base_app_path) {
+        Ok(checksum) => {
+            Some(checksum)    
+        }
+        
+        Err(e) => {
+            /* 
+                error getting checksum, even though the app directory exists.
+                This may have been caused by an interruped operation or similar.
+             */
+            None
+        }
+    }
 }
 
 const DOWNLOAD_FILENAME: &str = "download.tar.gz";
-pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_checksum: &str) -> Result<Option<String>, Box<dyn Error + Sync + Send>> {
+pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_checksum: &str, manifest_checksum: &str) -> Result<Option<String>, Box<dyn Error + Sync + Send>> {
     clean_directory(&tmp_dir)?;
 
     let system = utils::get_system_info().get_url_encoded_system_string();
@@ -279,6 +290,13 @@ pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_
         return Err(format!("Download failed. Status={}", response.status()).into());
     };
 
+    let calculated_checksum = calculate_sha256(&filename)?;
+    if calculated_checksum != manifest_checksum {
+        error!("Checksum mismatch for downloaded file: {}.\nIf the manifest is updated and you still get the error, it is due to server or download corruption", &filename);
+        clean_directory(&tmp_dir)?;
+        return Err("Checksum mismatch".into());
+    }
+    
     Ok(Some(filename))
 }
 
@@ -290,7 +308,7 @@ pub async fn get_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<(), Box<dyn Erro
         app_exists_in_manifest(app_ctx.clone(), app).await?
     };
 
-    let cache_checksum = match app_exists_in_cache(app_ctx.clone(), app, version_code).await? {
+    let cache_checksum = match app_exists_in_cache(app_ctx.clone(), app, version_code) {
         Some(checksum) => {
             checksum
         }
@@ -306,13 +324,18 @@ pub async fn get_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<(), Box<dyn Erro
     }
 
     let tmp_dir = format!("{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_TMP_DIR_NAME);
-    let filename_opt = download_app(app_ctx.clone(), app, &tmp_dir, &cache_checksum).await?;
+    let filename_opt = download_app(app_ctx.clone(), app, &tmp_dir, &cache_checksum, &manifest_checksum).await?;
     if let Some(downloaded_filename) = filename_opt {
         /* create the app + version directory */
         let app_dir = format!("{}/{}/{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_APPS_DIR_NAME, &app.name, version_code);
         create_cache_dir(&app_dir)?;
 
         extract_tar_gz(&downloaded_filename, &app_dir)?;
+        
+        /* create a checksum file */
+        let checksum_file = format!("{}/{}", &app_dir, CHECKSUM_FILENAME);
+        let mut file = File::create(&checksum_file)?;
+        file.write_all(&checksum_file.into_bytes())?;
 
         /* cleanup */
         clean_directory(&tmp_dir)?;

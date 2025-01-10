@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fs::{File};
 use std::{fs, io};
+use std::io::{BufReader, Read};
 use std::ops::{DerefMut};
 use std::path::Path;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use tar::Archive;
 use tokio::sync::{RwLock};
 use crate::error::raderr;
 use crate::utils::utils::TokenType::{Name, Variable, Version};
+use sha2::{Sha256, Digest};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
     match opt {
@@ -280,4 +282,35 @@ pub fn extract_tar_gz(archive_path: &str, output_path: &str) -> io::Result<()> {
     archive.unpack(output_path)?;
 
     Ok(())
+}
+
+/// Calculates the SHA-256 hash of a file.
+/// AI generated
+///
+/// # Arguments
+/// - `file_path`: The path of the file to hash.
+///
+/// # Returns
+/// - `Ok<String>`: The SHA-256 hash as a hexadecimal string.
+/// - `Err(io::Error)`: If there is an error reading the file.
+pub fn calculate_sha256(file_path: &str) -> io::Result<String> {
+    // Open the file
+    let file = File::open(file_path)?;
+    let mut reader = BufReader::new(file);
+
+    // Create a Sha256 hasher
+    let mut hasher = Sha256::new();
+
+    // Read the file in chunks and update the hasher
+    let mut buffer = [0u8; 4096];
+    while let Ok(bytes_read) = reader.read(&mut buffer) {
+        if bytes_read == 0 {
+            break; // EOF reached
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    // Finalize the hash and convert it to a hexadecimal string
+    let hash_result = hasher.finalize();
+    Ok(format!("{:x}", hash_result).to_lowercase())
 }
