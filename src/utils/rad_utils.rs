@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 use tar::Archive;
 use tokio::sync::{RwLock};
 use crate::error::raderr;
-use crate::utils::utils::TokenType::{Name, Variable, Version};
+use crate::utils::rad_utils::TokenType::{Name, Variable, Version};
 use sha2::{Sha256, Digest};
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {

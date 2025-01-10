@@ -4,8 +4,8 @@ use std::fs::File;
 use serde::{Deserialize, Serialize};
 use crate::broker::app_broker::BrokerConfig;
 use crate::error::raderr;
-use crate::utils::utils::TokenType::Name;
-use crate::utils::utils::Validation;
+use crate::utils::rad_utils::TokenType::Name;
+use crate::utils::rad_utils::Validation;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ConfigRaw {

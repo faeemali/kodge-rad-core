@@ -10,17 +10,16 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use crate::AppCtx;
 use crate::config::config::App;
-use crate::utils::utils;
-use tokio;
-use crate::utils::utils::{calculate_sha256, clean_directory, extract_tar_gz};
+use crate::utils::rad_utils;
+use crate::utils::rad_utils::{calculate_sha256, clean_directory, extract_tar_gz};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Execution {
     pub cmd: String,
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ManifestItem {
     pub name: String,
     pub summary: String,
@@ -45,7 +44,7 @@ pub struct ManifestItem {
     pub execution: Execution,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppDownloadInfo {
     pub manifest: ManifestItem,
     pub checksum: String,
@@ -130,9 +129,7 @@ pub async fn read_manifest(app_ctx: Arc<AppCtx>) -> Result<Vec<AppItem>, Box<dyn
         }
         Err(e) => {
             error!("Error reading manifest file: {}. Attempting to retrieve from server", e);
-            if let Err(update_err) = update_manifest(app_ctx.clone()).await {
-                return Err(update_err.into());
-            }
+            update_manifest(app_ctx.clone()).await?;
         }
     }
 
@@ -192,9 +189,7 @@ async fn get_latest_app_from_manifest(app_ctx: Arc<AppCtx>, app: &App) -> Result
     Err("App not found".into())
 }
 
-//check if an app exists in the manifest and on success, returns the
-//version code and checksum associated with the app
-async fn app_exists_in_manifest(app_ctx: Arc<AppCtx>, app: &App) -> Result<(u64, String), Box<dyn Error + Sync + Send>> {
+pub async fn get_manifest_entry_for_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<AppDownloadInfo, Box<dyn Error + Sync + Send>> {
     let manifest = read_manifest(app_ctx.clone()).await?;
     for a in &manifest {
         if a.name != app.name {
@@ -204,12 +199,21 @@ async fn app_exists_in_manifest(app_ctx: Arc<AppCtx>, app: &App) -> Result<(u64,
         for a_info in &a.app_info {
             let manifest = &a_info.manifest;
             if manifest.version_name == app.version {
-                return Ok((manifest.version_code, a_info.checksum.clone()));
+                return Ok(a_info.clone());
             }
         }
     }
 
     Err("App not found".into())
+}
+
+//check if an app exists in the manifest and on success, returns the
+//version code and checksum associated with the app. If the app is not
+//found, an error is returned
+async fn get_app_version_code_from_manifest(app_ctx: Arc<AppCtx>, app: &App) -> Result<(u64, String), Box<dyn Error + Sync + Send>> {
+    let app_info = get_manifest_entry_for_app(app_ctx.clone(), app).await?;
+    let manifest = &app_info.manifest;
+    Ok((manifest.version_code, app_info.checksum.clone()))
 }
 
 const CHECKSUM_FILENAME: &str = "checksum.sha256";
@@ -233,11 +237,18 @@ fn get_app_checksum(path: &str) -> Result<String, Box<dyn Error + Sync + Send>> 
     Ok(trimmed.to_string())
 }
 
+//retrieves the base directory of the app within the cache. Note that
+//subdirectories within this directory are used for specific app versions. This
+//function only returnes the top-level app directory
+pub fn get_app_base_directory(app_ctx: Arc<AppCtx>, app: &App) -> String {
+    format!("{}/{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_APPS_DIR_NAME, app.name)
+}
+
 //checks if the app exists in the cache i.e. the actual files exist.
 //This does not just look at the manifest. On success, the checksum of the
 //app is returned
 fn app_exists_in_cache(app_ctx: Arc<AppCtx>, app: &App, version_code: u64) -> Option<String> {
-    let base_app_path = format!("{}/{}/{}/{}/{}", &app_ctx.base_dir, CACHE_DIR_NAME, CACHE_APPS_DIR_NAME, app.name, version_code);
+    let base_app_path = format!("{}/{}", get_app_base_directory(app_ctx, app), version_code);
     let path = Path::new(&base_app_path);
     if !path.exists() {
         return None;
@@ -260,9 +271,9 @@ fn app_exists_in_cache(app_ctx: Arc<AppCtx>, app: &App, version_code: u64) -> Op
 
 const DOWNLOAD_FILENAME: &str = "download.tar.gz";
 pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_checksum: &str, manifest_checksum: &str) -> Result<Option<String>, Box<dyn Error + Sync + Send>> {
-    clean_directory(&tmp_dir)?;
+    clean_directory(tmp_dir)?;
 
-    let system = utils::get_system_info().get_url_encoded_system_string();
+    let system = rad_utils::get_system_info().get_url_encoded_system_string();
     let url = format!("{}/rest/get-app?system={}&app={}&checksum={}&version={}",
                       &app_ctx.config.server.addr,
                       &system,
@@ -284,7 +295,7 @@ pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_
         // Create the output file
         let output_path = format!("{}/{}", &tmp_dir, DOWNLOAD_FILENAME);
         let path = Path::new(&output_path);
-        let mut file = File::create(&path)?;
+        let mut file = File::create(path)?;
 
         // Save the contents to the file
         while let Some(chunk) = content.try_next().await? {
@@ -300,7 +311,7 @@ pub async fn download_app(app_ctx: Arc<AppCtx>, app: &App, tmp_dir: &str, cache_
     let calculated_checksum = calculate_sha256(&filename)?;
     if calculated_checksum != manifest_checksum {
         error!("Checksum mismatch for downloaded file: {}.\nIf the manifest is updated and you still get the error, it is due to server or download corruption", &filename);
-        clean_directory(&tmp_dir)?;
+        clean_directory(tmp_dir)?;
         return Err("Checksum mismatch".into());
     }
     
@@ -312,7 +323,7 @@ pub async fn get_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<(), Box<dyn Erro
     let (version_code, manifest_checksum) = if app.version == APP_VERSION_LATEST {
         get_latest_app_from_manifest(app_ctx.clone(), app).await?
     } else {
-        app_exists_in_manifest(app_ctx.clone(), app).await?
+        get_app_version_code_from_manifest(app_ctx.clone(), app).await?
     };
 
     let cache_checksum = match app_exists_in_cache(app_ctx.clone(), app, version_code) {

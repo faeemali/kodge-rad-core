@@ -8,7 +8,7 @@ use crate::broker::control::ControlMessages::{DisconnectMessage};
 use crate::broker::protocol::Message;
 use crate::broker::router::{RegisterConnectionReq, RouterControlMessages};
 use crate::broker::router::RouterControlMessages::RemoveRoutes;
-use crate::utils::utils;
+use crate::utils::rad_utils;
 
 pub struct RegisterMessageReq {
     pub data: ControlConnData,
@@ -88,7 +88,7 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
 
     let mut m_rx = rx;
     loop {
-        if utils::get_must_die(am_must_die.clone()).await {
+        if rad_utils::get_must_die(am_must_die.clone()).await {
             warn!("Control plane caught must die flag. Aborting");
             return;
         }
@@ -122,5 +122,5 @@ pub async fn ctrl_main(rx: Receiver<ControlMessages>,
     }
 
     warn!("Broker receiver closed. Aborting");
-    utils::set_must_die(am_must_die).await;
+    rad_utils::set_must_die(am_must_die).await;
 }

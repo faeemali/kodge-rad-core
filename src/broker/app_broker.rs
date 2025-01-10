@@ -24,7 +24,7 @@ use crate::broker::router::router_main;
 use crate::config::config::Config;
 use crate::error::{raderr};
 use crate::utils::timer::Timer;
-use crate::utils::utils;
+use crate::utils::rad_utils;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BrokerConfig {
@@ -213,8 +213,8 @@ async fn process_connection(mut sock: TcpStream,
             break;
         }
 
-        if utils::get_must_die(am_must_die.clone()).await {
-            warn!("Connection {} caught must die flag. Aborting.", utils::get_value_or_unknown(&conn_ctx.name));
+        if rad_utils::get_must_die(am_must_die.clone()).await {
+            warn!("Connection {} caught must die flag. Aborting.", rad_utils::get_value_or_unknown(&conn_ctx.name));
             break;
         }
 
@@ -364,7 +364,7 @@ async fn process_connection(mut sock: TcpStream,
         }
     } //loop
 
-    let name = utils::get_value_or_unknown(&conn_ctx.name);
+    let name = rad_utils::get_value_or_unknown(&conn_ctx.name);
     info!("Socket closing for {}", &name);
 
     if let Some(name) = &conn_ctx.name {
@@ -396,7 +396,7 @@ pub async fn start_broker(app_ctx: Arc<AppCtx>)
                 if let Err(e) = &res {
                     let msg = format!("Error accepting connection: {}. Aborting", &e);
                     error!("{}", msg);
-                    utils::set_must_die(app_ctx.must_die.clone()).await;
+                    rad_utils::set_must_die(app_ctx.must_die.clone()).await;
                 }
                 let (sock, addr) = res.unwrap();
                         tokio::spawn(process_connection(sock,
@@ -406,7 +406,7 @@ pub async fn start_broker(app_ctx: Arc<AppCtx>)
                                         app_ctx.must_die.clone())); //for sending messages to the router
             }
 
-            must_die = utils::get_must_die(app_ctx.must_die.clone()) => {
+            must_die = rad_utils::get_must_die(app_ctx.must_die.clone()) => {
                 if must_die {
                     warn!("Broker caught must die flag. Aborting");
                     return Ok(());

@@ -4,10 +4,12 @@ use std::process::exit;
 use std::sync::Arc;
 use tokio::sync::{RwLock};
 use log::{info, warn};
+use tokio::spawn;
 use crate::broker::app_broker::{start_broker, BrokerConfig};
 use crate::client::apps::{update_manifest, init_cache, show_manifest_summary, read_manifest, get_app, get_apps};
 use crate::config::config::{Config};
-use crate::utils::utils::{get_system_info, set_must_die, SystemInfo};
+use crate::utils::app_runner::{app_runner_init, app_runner_main};
+use crate::utils::rad_utils::{get_system_info, set_must_die, SystemInfo};
 
 mod utils;
 mod error;
@@ -94,13 +96,17 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         exit(0);
     }
 
+    ctrlc_async::set_async_handler(handle_signal(a_app_ctx.clone()))?;
+    
+    let (app_runner_tx, app_runner_rx) = app_runner_init();
+    
     info!("Application Starting");
     info!("base_dir: {}", base_dir);
-
-    ctrlc_async::set_async_handler(handle_signal(a_app_ctx.clone()))?;
-
+    
+    
+    spawn(app_runner_main(a_app_ctx.clone(), app_runner_rx));
+    
     start_broker(a_app_ctx).await?;
-
     info!("Main app exiting");
     exit(0);
 }

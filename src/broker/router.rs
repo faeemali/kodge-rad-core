@@ -12,7 +12,7 @@ use crate::AppCtx;
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Config, Route};
 use crate::error::{raderr};
-use crate::utils::utils;
+use crate::utils::rad_utils;
 
 /**
 The router accepts messages from all connections, then decides how best to route those
@@ -330,7 +330,7 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
-        if utils::get_must_die(app_ctx.must_die.clone()).await {
+        if rad_utils::get_must_die(app_ctx.must_die.clone()).await {
             warn!("Router caught must die flag. Aborting");
             return;
         }
@@ -370,5 +370,5 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
     }
 
     error!("Router error detected. Aborting");
-    utils::set_must_die(app_ctx.must_die.clone()).await;
+    rad_utils::set_must_die(app_ctx.must_die.clone()).await;
 }
