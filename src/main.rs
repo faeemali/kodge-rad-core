@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock};
 use log::{info, warn};
 use crate::broker::app_broker::{start_broker, BrokerConfig};
-use crate::client::apps::{update_manifest, init_cache, show_manifest_summary, read_manifest};
+use crate::client::apps::{update_manifest, init_cache, show_manifest_summary, read_manifest, get_app, get_apps};
 use crate::config::config::{Config};
 use crate::utils::utils::{get_system_info, set_must_die, SystemInfo};
 
@@ -51,7 +51,8 @@ async fn process_commands(app_ctx: Arc<AppCtx>, opts: &[String]) -> Result<(), B
         }
         
         "get" => {
-            
+            get_apps(app_ctx.clone()).await?;
+            info!("Apps downloaded");
         }
         
         _ => {

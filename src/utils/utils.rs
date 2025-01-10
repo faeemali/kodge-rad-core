@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fs::{File};
+use std::{fs, io};
 use std::ops::{DerefMut};
 use std::path::Path;
 use std::sync::Arc;
@@ -222,4 +223,33 @@ pub fn get_system_info() -> SystemInfo {
         os: os.to_string(),
         arch: arch.to_string(),
     }
+}
+
+//given a directory, removes all files and subdirectories within that directory.
+//the directory itself is not removed. AI generated
+pub fn clean_directory(path: &str) -> io::Result<()> {
+    let dir_path = Path::new(path);
+
+    // Check if the directory exists and is actually a directory
+    if dir_path.exists() && dir_path.is_dir() {
+        // Iterate through the directory's contents
+        for entry in fs::read_dir(dir_path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+
+            // Remove files and empty directories
+            if entry_path.is_file() {
+                fs::remove_file(entry_path)?;
+            } else if entry_path.is_dir() {
+                fs::remove_dir_all(entry_path)?;
+            }
+        }
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Specified path is not a directory or does not exist",
+        ));
+    }
+
+    Ok(())
 }
