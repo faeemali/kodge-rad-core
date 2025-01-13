@@ -92,6 +92,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     init_cache(a_app_ctx.clone())?;
 
     if args.len() > 3 {
+        if args[3] == "help" || args[3] == "--help" || args[3] == "-h" {
+            show_help(&args[0]);
+            exit(1);
+        }
+
         process_commands(a_app_ctx.clone(), &args[3..]).await?;
         exit(0);
     }

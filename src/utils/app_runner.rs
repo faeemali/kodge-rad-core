@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{error, info};
@@ -31,11 +33,12 @@ async fn start_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<RunningAppInfo, Bo
     let manifest = &app_info.manifest;
     let app_dir = format!("{}/{}", app_base_dir, manifest.version_code);
 
-    /* TODO: must use absolute path or this won't work */
-    let cmd = format!("{}/{}", &app_dir, &manifest.execution.cmd);
+    let cmd_str = format!("{}/{}", &app_dir, &manifest.execution.cmd);
+    let cmd = Path::new(cmd_str.as_str());
+    let abs_cmd = fs::canonicalize(&cmd)?;
     
-    info!("Starting app: {} with instance id: {} and command {}", &app.name, &app.instance_id, &cmd);
-    let mut command = Command::new(cmd);
+    info!("Starting app: {} with instance id: {} and command {}", &app.name, &app.instance_id, &abs_cmd.display());
+    let mut command = Command::new(abs_cmd);
 
     // Set the command-line arguments
     if let Some(args) = &manifest.execution.args {
@@ -79,7 +82,8 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>, rx: Receiver<AppRunnerCmds>) 
         }
     };
 
-    loop {
+    let mut done = false;
+    while !done {
         for app_info in &mut app_infos {
             let child = &mut app_info.child;
             match child.try_wait() {
@@ -88,6 +92,7 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>, rx: Receiver<AppRunnerCmds>) 
                         info!("App {} exited with status {}", app_info.app.name, status);
 
                         /* TODO: notify all other apps that they must die */
+                        done = true;
                     } //else app has not yet exited
                 }
                 Err(e) => {
