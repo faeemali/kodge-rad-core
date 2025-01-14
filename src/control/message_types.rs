@@ -1,28 +1,27 @@
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 use crate::broker::protocol::Message;
-use crate::control::control_plane::ControlConnData;
 
 pub enum ControlMessages {
-    NewConnection(SocketAddr),
+    NewConnection((SocketAddr, Sender<ControlMessages>)),
     Disconnected(SocketAddr),
-    RegisterMessage(RegisterMessageReq),
-    RegisterConnection(RegisterConnectionReq),
+    RegisterMessage((SocketAddr, RegisterMessageReq)),
+    RegisterConnection(RegisterMessageReq),
     RemoveRoutes(String),
     AppExit(String),
+    NewMessage(Message),
 
 }
 
+#[derive(Clone)]
 pub struct RegisterMessageReq {
-    pub data: ControlConnData,
-    pub conn_router_tx: Sender<Message>, //for connection to send messages to router
+    pub instance_id: String,
+    pub rx_msg_types: Vec<String>,
+    pub tx_msg_types: Vec<String>,
 }
 
-/**
-    The router accepts messages from all connections, then decides how best to route those
-    messages to other applications
- */
-pub struct RegisterConnectionReq {
-    pub name: String, //connection name
-    pub conn_tx: Sender<Message>, //to send messages to connection
+pub struct ControlConn {
+    pub start_time: i64,
+    pub conn_tx: Sender<ControlMessages>,
+    pub data: Option<RegisterMessageReq>,
 }

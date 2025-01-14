@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
 use crate::AppCtx;
-use crate::control::message_types::{RegisterConnectionReq, ControlMessages};
+use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Route};
+use crate::control::message_types::ControlMessages::NewMessage;
 use crate::error::raderr;
-use crate::utils::rad_utils;
 
 pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
     channel::<ControlMessages>(32)
@@ -19,10 +19,6 @@ pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
 
 async fn process_control_message(ctx: &mut RouterCtx, msg: ControlMessages) {
     match msg {
-        ControlMessages::RegisterConnection(conn) => {
-            ctx.connections.insert(conn.name.clone(), conn);
-        }
-
         ControlMessages::RemoveRoutes(name) => {
             info!("Disconnecting {} from the router", &name);
             ctx.connections.remove(&name);
@@ -156,7 +152,7 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     None
 }
 
-fn find_connection_by_name<'a>(ctx: &'a RouterCtx, name: &str) -> Option<&'a RegisterConnectionReq> {
+fn find_connection_by_name<'a>(ctx: &'a RouterCtx, name: &str) -> Option<&'a RegisterMessageReq> {
     ctx.connections.get(name)
 }
 
@@ -168,10 +164,11 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
             /* send message to all dsts */
             for dst in dsts {
                 if let Some(c) = find_connection_by_name(ctx, dst) {
-                    if let Err(e) = c.conn_tx.send(msg.clone()).await {
-                        error!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
-                        return;
-                    }
+                    /* TODO: fixme, must send message to control plane */
+                    // if let Err(e) = c.conn_tx.send(msg.clone()).await {
+                    //     error!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
+                    //     return;
+                    // }
                 } else {
                     debug!("dst {} does not exist. Unable to forward message", dst);
                 }
@@ -185,7 +182,7 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
 
 struct RouterCtx {
     /// the registration requests (name, allowed tx/rx messages)
-    pub connections: HashMap<String, RegisterConnectionReq>,
+    pub connections: HashMap<String, RegisterMessageReq>,
 
     /// the router configuration, as read from the config file
     pub routes: Vec<Route>,
@@ -287,13 +284,17 @@ async fn preprocess_routes(routes: &[Route]) -> HashMap<String, Vec<RksDsts>> {
     routes_map
 }
 
-pub async fn get_message_from_src(conn: &mut Receiver<Message>)
+pub async fn get_message_from_src(conn: &mut Receiver<ControlMessages>)
                                   -> Result<Vec<Message>, Box<dyn Error + Sync + Send>> {
     let mut msgs = vec![];
 
     match conn.try_recv() {
         Ok(msg) => {
-            msgs.push(msg);
+            if let NewMessage(m) = msg {
+                msgs.push(m);
+            }
+
+            /* TODO: what about the other message types? */
         }
 
         Err(e) => {
@@ -319,14 +320,14 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
         routes_map,
     };
 
-    let mut m_ctrl_rx = ctrl_rx; //for control messages
-    let mut m_conn_rx = conn_rx; //for connection messages
+    let mut router_rx = router_rx;
     loop {
         /* todo handle must die */
         let mut busy = false;
 
+
         //process messages from the control plane
-        match m_ctrl_rx.try_recv() {
+        match router_rx.try_recv() {
             Ok(msg) => {
                 process_control_message(&mut ctx, msg).await;
                 busy = true;
@@ -340,7 +341,7 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
         }
 
         //process messages from stdin or one of the connections
-        let msgs_res = get_message_from_src(&mut m_conn_rx).await;
+        let msgs_res = get_message_from_src(&mut router_rx).await;
         if let Err(e) = msgs_res {
             let msg = format!("Error retrieving source messages: {}", &e);
             error!("{}", &msg);

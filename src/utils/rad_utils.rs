@@ -189,6 +189,10 @@ impl Validation {
     }
 }
 
+pub fn get_datetime_as_utc_millis() -> i64 {
+    chrono::offset::Utc::now().timestamp_millis()
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemInfo {
     pub os: String,
