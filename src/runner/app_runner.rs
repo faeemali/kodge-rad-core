@@ -10,18 +10,15 @@ use tokio::time::sleep;
 use crate::AppCtx;
 use crate::client::apps::{get_app_base_directory, get_manifest_entry_for_app};
 use crate::config::config::App;
-
-pub enum AppRunnerCmds {
-    Exit(String),
-}
+use crate::control::message_types::ControlMessages;
 
 pub struct RunningAppInfo<'a> {
     pub app: &'a App,
     pub child: Child,
 }
 
-pub fn app_runner_init() -> (Sender<AppRunnerCmds>, Receiver<AppRunnerCmds>) {
-    channel::<AppRunnerCmds>(10)
+pub fn app_runner_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
+    channel::<ControlMessages>(10)
 }
 
 const ENV_RAD_INSTANCE_ID: &str = "RAD_INSTANCE_ID";
@@ -36,7 +33,7 @@ async fn start_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<RunningAppInfo, Bo
     let cmd_str = format!("{}/{}", &app_dir, &manifest.execution.cmd);
     let cmd = Path::new(cmd_str.as_str());
     let abs_cmd = fs::canonicalize(&cmd)?;
-    
+
     info!("Starting app: {} with instance id: {} and command {}", &app.name, &app.instance_id, &abs_cmd.display());
     let mut command = Command::new(abs_cmd);
 
@@ -55,7 +52,7 @@ async fn start_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<RunningAppInfo, Bo
     let child = command.spawn()?;
     Ok(RunningAppInfo {
         app,
-        child
+        child,
     })
 }
 
@@ -69,7 +66,9 @@ async fn start_apps<'a>(app_ctx: &'a Arc<AppCtx>) -> Result<Vec<RunningAppInfo<'
     Ok(children)
 }
 
-pub async fn app_runner_main(app_ctx: Arc<AppCtx>, rx: Receiver<AppRunnerCmds>) {
+pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
+                             rx: Receiver<ControlMessages>,
+                             ctrl_tx: Sender<ControlMessages>) {
     info!("Starting App Runner");
 
     info!("SLEEPING BEFORE STARTING APP. MUST CHANGE THIS!!!");

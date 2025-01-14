@@ -10,18 +10,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::AppCtx;
 use crate::broker::auth::{authenticate};
 use crate::broker::auth_types::{AuthMessageReq, AuthMessageResp, MSG_TYPE_AUTH, MSG_TYPE_AUTH_RESP};
 use crate::broker::app_broker::Actions::{MustDisconnect, NoAction};
 use crate::broker::app_broker::States::{Authenticate, Process, Register};
-use crate::broker::control::{ControlConnData, ControlMessages, ctrl_main, RegisterMessageReq};
-use crate::broker::control::ControlMessages::{DisconnectMessage, RegisterMessage};
+use crate::control::control_plane::{ControlConnData};
 use crate::broker::protocol::{Message, MessageHeader, Protocol};
-use crate::broker::router::router_main;
-use crate::config::config::Config;
+use crate::control::message_types::ControlMessages::{Disconnected, NewConnection, RegisterMessage};
+use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::error::{raderr};
 use crate::utils::timer::Timer;
 use crate::utils::rad_utils;
@@ -57,10 +55,7 @@ async fn __get_control_message(conn_ctx: &mut ConnectionCtx) -> Result<Actions, 
         match ctrl_rx.try_recv() {
             Ok(msg) => {
                 match &msg {
-                    DisconnectMessage(m) => {
-                        return Ok(MustDisconnect);
-                    }
-
+                    /* todo handle other control messages here */
                     _ => {
                         //ignore
                     }
@@ -178,22 +173,19 @@ struct ConnectionCtx {
     pub state: States,
     pub name: Option<String>,
     pub protocol: Protocol,
-    pub ctrl_tx: Sender<ControlMessages>, //send messages to the control plane
-    pub ctrl_rx: Option<Receiver<ControlMessages>>, //receive messages from the control plane
-    pub router_tx: Sender<Message>, //send messages to router
-    pub router_rx: Option<Receiver<Message>>, //for the router to send messages to the connection
+    pub ctrl_tx: Sender<ControlMessages>,
 }
 
 async fn process_connection(mut sock: TcpStream,
                             addr: SocketAddr,
-                            ctrl_tx: Sender<ControlMessages>,
-                            router_tx: Sender<Message>,
-                            am_must_die: Arc<RwLock<bool>>)
+                            ctrl_tx: Sender<ControlMessages>)
                             -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("broker accepted connection from: {}", addr);
 
     let protocol = Protocol::new()?;
-
+    let (conn_tx, conn_rx) = channel::<ControlMessages>(32);
+    ctrl_tx.send(NewConnection(addr)).await?;
+    
     let mut conn_ctx = ConnectionCtx {
         auth_timer: Timer::new(Duration::from_millis(10000)),
         auth_message: None,
@@ -201,9 +193,6 @@ async fn process_connection(mut sock: TcpStream,
         name: None,
         protocol,
         ctrl_tx,
-        ctrl_rx: None,
-        router_tx,
-        router_rx: None,
     };
 
     let mut registered = false;
@@ -213,11 +202,7 @@ async fn process_connection(mut sock: TcpStream,
             break;
         }
 
-        if rad_utils::get_must_die(am_must_die.clone()).await {
-            warn!("Connection {} caught must die flag. Aborting.", rad_utils::get_value_or_unknown(&conn_ctx.name));
-            break;
-        }
-
+        /* todo handle must die */
 
         let mut busy = false;
 
@@ -250,7 +235,7 @@ async fn process_connection(mut sock: TcpStream,
                     if msgs.is_empty() {
                         continue;
                     }
-                    
+
                     //debug!("broker: after feed: num messages = {}", msgs.len());
                     if !registered {
                         match register_connection(&mut conn_ctx, msgs.clone()).await {
@@ -323,7 +308,7 @@ async fn process_connection(mut sock: TcpStream,
                         }
                         let encoded_msg = encoded_msg_res.unwrap();
                         let encoded_slice = encoded_msg.as_slice();
-                        
+
                         //debug!("Broker writing: {:?}", &encoded_slice);
 
                         let mut pos = 0usize;
@@ -367,28 +352,29 @@ async fn process_connection(mut sock: TcpStream,
     let name = rad_utils::get_value_or_unknown(&conn_ctx.name);
     info!("Socket closing for {}", &name);
 
-    if let Some(name) = &conn_ctx.name {
-        /* send a disconnect message to the control plane */
-        conn_ctx.ctrl_tx.send(DisconnectMessage(name.to_string())).await?;
-    }
+    ctrl_tx.send(Disconnected(addr)).await?;
 
     Ok(())
 }
 
+pub fn broker_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
+    channel(32)
+}
+
 ///start the broker, which includes the socket listener, router, and control plane
-pub async fn start_broker(app_ctx: Arc<AppCtx>)
-                         -> Result<(), Box<dyn Error + Sync + Send>> {
-    let (router_ctrl_tx, router_ctrl_rx) = channel(32);
-    let (router_conn_tx, router_conn_rx) = channel(32);
+pub async fn broker_main(app_ctx: Arc<AppCtx>,
+                         broker_rx: Receiver<ControlMessages>,
+                         ctrl_tx: Sender<ControlMessages>) {
+    let listener = match TcpListener::bind(&app_ctx.config.broker.bind_addr).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            let msg = format!("Error starting tcp listener: {}", &e);
+            error!("{}", &msg);
+            /* todo handle must die */
+            panic!("{}", msg);
+        }
+    };
 
-    tokio::spawn(router_main(app_ctx.clone(),
-                             router_ctrl_rx,
-                             router_conn_rx));
-
-    let (ctrl_tx, ctrl_rx) = channel(32);
-    tokio::spawn(ctrl_main(ctrl_rx, router_ctrl_tx.clone(), app_ctx.must_die.clone()));
-
-    let listener = TcpListener::bind(&app_ctx.config.broker.bind_addr).await?;
     loop {
         let mut must_sleep = false;
         select! {
@@ -396,23 +382,19 @@ pub async fn start_broker(app_ctx: Arc<AppCtx>)
                 if let Err(e) = &res {
                     let msg = format!("Error accepting connection: {}. Aborting", &e);
                     error!("{}", msg);
-                    rad_utils::set_must_die(app_ctx.must_die.clone()).await;
+
+                    /* todo handle must die */
+                    //return?
                 }
+
                 let (sock, addr) = res.unwrap();
                         tokio::spawn(process_connection(sock,
                                         addr,
-                                        ctrl_tx.clone(), //for sending messages to the control plane
-                                        router_conn_tx.clone(),
-                                        app_ctx.must_die.clone())); //for sending messages to the router
+                                        ctrl_tx.clone())); 
             }
 
-            must_die = rad_utils::get_must_die(app_ctx.must_die.clone()) => {
-                if must_die {
-                    warn!("Broker caught must die flag. Aborting");
-                    return Ok(());
-                }
-                must_sleep = true;
-            }
+
+            /* todo handle must die */
         } //select
 
         if must_sleep {

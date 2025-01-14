@@ -3,44 +3,36 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, warn};
-use serde::{Serialize};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::RwLock;
 use tokio::time::sleep;
 use crate::AppCtx;
+use crate::control::message_types::{RegisterConnectionReq, ControlMessages};
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
-use crate::config::config::{Config, Route};
-use crate::error::{raderr};
+use crate::config::config::{Route};
+use crate::error::raderr;
 use crate::utils::rad_utils;
 
-/**
-The router accepts messages from all connections, then decides how best to route those
-messages to other applications
- */
-
-pub struct RegisterConnectionReq {
-    pub name: String, //connection name
-    pub conn_tx: Sender<Message>, //to send messages to connection
+pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
+    channel::<ControlMessages>(32)
 }
 
-pub enum RouterControlMessages {
-    RegisterConnection(RegisterConnectionReq),
-    RemoveRoutes(String),
-}
-
-async fn process_control_message(ctx: &mut RouterCtx, msg: RouterControlMessages) {
+async fn process_control_message(ctx: &mut RouterCtx, msg: ControlMessages) {
     match msg {
-        RouterControlMessages::RegisterConnection(conn) => {
+        ControlMessages::RegisterConnection(conn) => {
             ctx.connections.insert(conn.name.clone(), conn);
         }
 
-        RouterControlMessages::RemoveRoutes(name) => {
+        ControlMessages::RemoveRoutes(name) => {
             info!("Disconnecting {} from the router", &name);
             ctx.connections.remove(&name);
 
             //do not remove the static routes. They are "static", unlike connections
             //which are dynamic
+        }
+
+        _ => {
+            todo!()
         }
     }
 }
@@ -317,8 +309,8 @@ pub async fn get_message_from_src(conn: &mut Receiver<Message>)
 }
 
 pub async fn router_main(app_ctx: Arc<AppCtx>,
-                         ctrl_rx: Receiver<RouterControlMessages>,
-                         conn_rx: Receiver<Message>) {
+                         router_rx: Receiver<ControlMessages>,
+                         ctrl_tx: Sender<ControlMessages>) {
     let routes_map = preprocess_routes(&app_ctx.config.routes).await;
 
     let mut ctx = RouterCtx {
@@ -330,11 +322,7 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
     let mut m_ctrl_rx = ctrl_rx; //for control messages
     let mut m_conn_rx = conn_rx; //for connection messages
     loop {
-        if rad_utils::get_must_die(app_ctx.must_die.clone()).await {
-            warn!("Router caught must die flag. Aborting");
-            return;
-        }
-
+        /* todo handle must die */
         let mut busy = false;
 
         //process messages from the control plane
@@ -370,5 +358,6 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
     }
 
     error!("Router error detected. Aborting");
-    rad_utils::set_must_die(app_ctx.must_die.clone()).await;
+
+    /* todo handle must die */
 }

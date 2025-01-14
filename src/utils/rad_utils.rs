@@ -2,15 +2,12 @@ use std::error::Error;
 use std::fs::{File};
 use std::{fs, io};
 use std::io::{BufReader, Read};
-use std::ops::{DerefMut};
 use std::path::Path;
-use std::sync::Arc;
 use base64::DecodeError;
 use base64::prelude::*;
 use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
 use tar::Archive;
-use tokio::sync::{RwLock};
 use crate::error::raderr;
 use crate::utils::rad_utils::TokenType::{Name, Variable, Version};
 use sha2::{Sha256, Digest};
@@ -37,17 +34,6 @@ pub fn load_yaml<T: DeserializeOwned>(filename: &str) -> Result<T, Box<dyn Error
 #[allow(dead_code)]
 pub fn decode_base64_byte_stream(encoded_data: &str) -> Result<Vec<u8>, DecodeError> {
     BASE64_STANDARD.decode(encoded_data)
-}
-
-pub async fn get_must_die(am_must_die: Arc<RwLock<bool>>) -> bool {
-    let must_die_mg = am_must_die.read().await;
-    *must_die_mg
-}
-
-pub async fn set_must_die(am_must_die: Arc<RwLock<bool>>) {
-    let mut must_die_mg = am_must_die.write().await;
-    let must_die = must_die_mg.deref_mut();
-    *must_die = true;
 }
 
 pub const MIN_NAME_LEN: usize = 1;
