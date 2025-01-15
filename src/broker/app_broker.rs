@@ -3,11 +3,11 @@ use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::{Arc};
 use std::time::Duration;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use tokio::io::{Interest, Ready};
+use tokio::io::{Interest};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::{select, time};
+use tokio::{select};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
@@ -15,12 +15,12 @@ use crate::AppCtx;
 use crate::broker::auth::{authenticate};
 use crate::broker::auth_types::{AuthMessageReq, MSG_TYPE_AUTH};
 use crate::broker::app_broker::States::{AuthenticateAndRegister, Process, WaitForRegistrationResponse};
-use crate::broker::protocol::{Message, MessageHeader, Protocol};
-use crate::control::message_types::ControlMessages::{AppExit, Disconnected, NewConnection, NewMessage, RegisterMessage};
+use crate::broker::protocol::{Message, Protocol};
+use crate::control::message_types::ControlMessages::{AppExit, Disconnected, NewConnection, NewMessage, RegisterMessage, Registered};
 use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::error::{raderr};
+use crate::utils::rad_utils::get_value_or_unknown;
 use crate::utils::timer::Timer;
-use crate::utils::rad_utils;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BrokerConfig {
@@ -75,18 +75,6 @@ async fn register_client(conn_ctx: &mut ConnectionCtx) -> Result<(), Box<dyn Err
     }
 }
 
-async fn process_messages(conn_ctx: &mut ConnectionCtx,
-                          conn_rx: &mut Receiver<ControlMessages>,
-                          msgs: Vec<Message>)
-                          -> Result<bool, Box<dyn Error + Sync + Send>> {
-    /* TODO: check for messages from the control plane */
-
-
-    /* TODO: pass all messages to the appropriate connection */
-
-    Ok(true)
-}
-
 struct ConnectionCtx {
     pub addr: SocketAddr,
     //timer for authentication
@@ -130,20 +118,17 @@ async fn read_socket_data(conn_ctx: &mut ConnectionCtx,
 
                     *state = WaitForRegistrationResponse;
                 }
-                
-                WaitForRegistrationResponse => {
-                }
+
+                WaitForRegistrationResponse => {}
 
                 Process => {
-                    let process_res = process_messages(conn_ctx, conn_rx, msgs).await;
-                    match process_res {
-                        Ok(must_continue) => {
-                            if !must_continue {
-                                return raderr("Must disconnect. Aborting connecting processing");
+                    if !msgs.is_empty() {
+                        /* send received messages to control plane */
+                        for msg in msgs {
+                            if conn_ctx.ctrl_tx.send(NewMessage(msg)).await.is_err() {
+                                let instance_id = get_value_or_unknown(&conn_ctx.instance_id);
+                                panic!("Error sending message to control plane for {}", &instance_id);
                             }
-                        }
-                        Err(e) => {
-                            return raderr(format!("Error processing messages: {}", &e).as_str());
                         }
                     }
                 } //process
@@ -206,6 +191,7 @@ async fn write_socket_data(sock: &mut TcpStream, msgs: &mut Vec<Message>) -> Res
     Ok(true)
 }
 
+// process 1 connection only
 async fn process_connection(mut sock: TcpStream,
                             addr: SocketAddr,
                             ctrl_tx: Sender<ControlMessages>)
@@ -250,11 +236,16 @@ async fn process_connection(mut sock: TcpStream,
                         continue;
                     }
 
+                    Registered => {
+                        let instance_id = get_value_or_unknown(&conn_ctx.instance_id);
+                        info!("{} registered. Moving to the process state.", instance_id);
+                        state = Process
+                    }
+
                     NewMessage(msg) => {
+                        /* track messages to be sent back to the client */
                         tx_msgs.push(msg);
                     }
-                    
-                    /* todo listen for a registration success/failure here */
 
                     _ => {}
                 }

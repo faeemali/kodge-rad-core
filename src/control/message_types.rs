@@ -6,10 +6,12 @@ pub enum ControlMessages {
     NewConnection((SocketAddr, Sender<ControlMessages>)),
     Disconnected(SocketAddr),
     RegisterMessage((SocketAddr, RegisterMessageReq)),
+    Registered,
     RegisterRoutes(RegisterMessageReq),
     RemoveRoutes(String),
     AppExit(String),
     NewMessage(Message),
+    RouteDstMessage((String, Message)) //route to dst based on instance id
 }
 
 #[derive(Clone)]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
@@ -10,27 +10,33 @@ use crate::AppCtx;
 use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Route};
-use crate::control::message_types::ControlMessages::{NewMessage, RegisterRoutes, RemoveRoutes};
+use crate::control::message_types::ControlMessages::{NewMessage, RegisterRoutes, RemoveRoutes, RouteDstMessage};
 use crate::error::raderr;
 
 pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
     channel::<ControlMessages>(32)
 }
 
-async fn process_control_message(ctx: &mut RouterCtx, msg: ControlMessages) {
+//process messages received from the control plane
+async fn process_control_message(ctx: &mut RouterCtx, ctrl_tx: Sender<ControlMessages>, msg: ControlMessages) {
     match msg {
         RegisterRoutes(req) => {
             let instance_id = req.instance_id.clone();
             ctx.connections.insert(instance_id.clone(), req);
             info!("Registered routes for {}", &instance_id);
         }
-        
+
         RemoveRoutes(instance_id) => {
             info!("Disconnecting {} from the router", &instance_id);
             ctx.connections.remove(&instance_id);
 
             //do not remove the static routes. They are "static", unlike connections
             //which are dynamic
+        }
+
+        /* handle routing for this message */
+        NewMessage(msg) => {
+            handle_message_routing(ctx, ctrl_tx.clone(), msg).await;
         }
 
         _ => {
@@ -140,7 +146,7 @@ fn __match_route<'a>(msg: &Message, key: &str, val_opt: &Option<&'a Vec<RksDsts>
 
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
-async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
+async fn get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
     let key = format!("{}/*", &msg.header.instance_id);
     let val_opt = ctx.routes_map.get(&key);
     let ret = __match_route(msg, &key, &val_opt);
@@ -158,30 +164,18 @@ async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Ve
     None
 }
 
-fn find_connection_by_name<'a>(ctx: &'a RouterCtx, name: &str) -> Option<&'a RegisterMessageReq> {
-    ctx.connections.get(name)
-}
-
-/// processes messages received from the various network connections, or messages
-/// destined for network connections
-async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
-    match __get_route_dst(ctx, &msg).await {
+async fn handle_message_routing(ctx: &RouterCtx, ctrl_tx: Sender<ControlMessages>, msg: Message) {
+    match get_route_dst(ctx, &msg).await {
         Some(dsts) => {
             /* send message to all dsts */
             for dst in dsts {
-                if let Some(c) = find_connection_by_name(ctx, dst) {
-                    /* TODO: fixme, must send message to control plane */
-                    // if let Err(e) = c.conn_tx.send(msg.clone()).await {
-                    //     error!("Unable to send message to dst: {}. Receiver dropped. Error: {}", dst, &e);
-                    //     return;
-                    // }
-                } else {
-                    debug!("dst {} does not exist. Unable to forward message", dst);
+                if ctrl_tx.send(RouteDstMessage((dst.clone(), msg.clone()))).await.is_err() {
+                    panic!("Router failed to route message to control plane!!!");
                 }
             }
         }
         None => {
-            debug!("Ignoring route for: {}/{}. Not found", &msg.header.instance_id, &msg.header.msg_type);
+            warn!("Ignoring route for: {}/{}. Not found", &msg.header.instance_id, &msg.header.msg_type);
         }
     }
 }
@@ -290,31 +284,6 @@ async fn preprocess_routes(routes: &[Route]) -> HashMap<String, Vec<RksDsts>> {
     routes_map
 }
 
-pub async fn get_message_from_src(conn: &mut Receiver<ControlMessages>)
-                                  -> Result<Vec<Message>, Box<dyn Error + Sync + Send>> {
-    let mut msgs = vec![];
-
-    match conn.try_recv() {
-        Ok(msg) => {
-            if let NewMessage(m) = msg {
-                msgs.push(m);
-            }
-
-            /* TODO: what about the other message types? */
-        }
-
-        Err(e) => {
-            if e == TryRecvError::Disconnected {
-                let msg = "Router connection disconnect detected. Aborting";
-                error!("{}", msg);
-                return raderr(msg);
-            }
-        }
-    }
-
-    Ok(msgs)
-}
-
 pub async fn router_main(app_ctx: Arc<AppCtx>,
                          router_rx: Receiver<ControlMessages>,
                          ctrl_tx: Sender<ControlMessages>) {
@@ -335,7 +304,7 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
         //process messages from the control plane
         match router_rx.try_recv() {
             Ok(msg) => {
-                process_control_message(&mut ctx, msg).await;
+                process_control_message(&mut ctx, ctrl_tx.clone(), msg).await;
                 busy = true;
             }
             Err(e) => {
@@ -343,19 +312,6 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
                     error!("Router control disconnect detected. Aborting");
                     break;
                 }
-            }
-        }
-
-        //process messages from stdin or one of the connections
-        let msgs_res = get_message_from_src(&mut router_rx).await;
-        if let Err(e) = msgs_res {
-            let msg = format!("Error retrieving source messages: {}", &e);
-            error!("{}", &msg);
-        } else {
-            let msgs = msgs_res.unwrap();
-            for msg in msgs {
-                process_connection_message(&ctx, msg).await;
-                busy = true;
             }
         }
 

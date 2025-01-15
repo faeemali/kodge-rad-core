@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
-use crate::control::message_types::ControlMessages::NewMessage;
+use crate::control::message_types::ControlMessages::{NewMessage, Registered};
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -116,8 +116,13 @@ async fn register_connection(ctx: &mut CtrlCtx,
         /* notify the router */
         ctx.router_tx.send(ControlMessages::RegisterRoutes(new_conn)).await?;
 
-        let resp = Message::new_from_type(&instance_id, "", MSG_TYPE_AUTH_RESP, AuthMessageResp {success: true})?;
+        /* notify the broker that registration is complete */
+        val.conn_tx.send(Registered).await?;
+
+        /* send an auth response */
+        let resp = Message::new_from_type(&instance_id, "", MSG_TYPE_AUTH_RESP, AuthMessageResp { success: true })?;
         val.conn_tx.send(NewMessage(resp)).await?;
+
         Ok(())
     } else {
         raderr("Unexpected error. Unable to register connection. Connection socket info does not exist")
@@ -132,6 +137,11 @@ fn add_new_connection(ctx: &mut CtrlCtx, addr: SocketAddr, conn_tx: Sender<Contr
     });
 }
 
+// notify all subsystems that they must die
+async fn send_must_die_msgs(ctx: &mut CtrlCtx) {
+    todo!()
+}
+
 pub async fn ctrl_main(ctx: CtrlCtx,
                        rx: Receiver<ControlMessages>) {
     info!("Broker command receiver running");
@@ -141,36 +151,53 @@ pub async fn ctrl_main(ctx: CtrlCtx,
     loop {
         /* todo handle must die */
         let msg_opt = rx.recv().await;
-        match msg_opt {
-            Some(m) => {
-                match m {
-                    /* new connection from the broker */
-                    ControlMessages::NewConnection((addr, conn_tx)) => {
-                        add_new_connection(&mut ctx, addr, conn_tx);
-                    }
+        let m = match msg_opt {
+            Some(m) => m,
+            None => {
+                continue;
+            }
+        };
 
-                    ControlMessages::RegisterMessage((addr, msg_info)) => {
-                        if let Err(e) = register_connection(&mut ctx, addr, msg_info).await {
-                            panic!("Error registering connection: {}", &e);
-                        }
-                    }
+        match m {
+            /* new connection from the broker */
+            ControlMessages::NewConnection((addr, conn_tx)) => {
+                add_new_connection(&mut ctx, addr, conn_tx);
+            }
 
-                    ControlMessages::Disconnected(addr) => {
-                        info!("Disconnecting connection: {}", &addr);
-
-                        /* todo must notify router to remove routes */
-                        ctx.connections.remove(&addr);
-                    }
-
-                    _ => {
-                        todo!();
-                    }
+            ControlMessages::RegisterMessage((addr, msg_info)) => {
+                if let Err(e) = register_connection(&mut ctx, addr, msg_info).await {
+                    panic!("Error registering connection: {}", &e);
                 }
             }
-            None => {
-                break;
+
+            ControlMessages::Disconnected(addr) => {
+                info!("Disconnecting connection: {}", &addr);
+
+                /* todo must notify router to remove routes */
+                ctx.connections.remove(&addr);
             }
-        } //match
+            
+            NewMessage(msg) => {
+                /* forward to router */
+                if ctx.router_tx.send(NewMessage(msg)).await.is_err() {
+                    send_must_die_msgs(&mut ctx).await;
+                }
+            }
+            
+            ControlMessages::RouteDstMessage((instance_id, msg)) => {
+                if let Some((_, conn)) = find_connection_by_instance_id(&ctx, &instance_id) {
+                    if let Err(e) = conn.conn_tx.send(NewMessage(msg)).await {
+                        error!("Error sending message to {}: {}", &instance_id, &e);
+                    }
+                } else {
+                    error!("Connection not found for instance_id: {}", &instance_id);
+                }
+            }
+
+            _ => {
+                todo!();
+            }
+        }
     }
 
     warn!("Broker receiver closed. Aborting");
