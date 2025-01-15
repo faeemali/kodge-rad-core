@@ -134,7 +134,7 @@ pub async fn ctrl_main(ctx: CtrlCtx,
     let mut ctx = ctx;
     let mut rx = rx;
     loop {
-        /* todo mandle must die */
+        /* todo handle must die */
         let msg_opt = rx.recv().await;
         match msg_opt {
             Some(m) => {

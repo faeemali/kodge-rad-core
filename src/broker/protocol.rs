@@ -20,7 +20,7 @@ where:
     - crc is 16 bytes long, calculated with crc16. byte0 is bits 0-7, byte1 is bits-8-15.
         The crc is calculated for all data from <message_type> to <binary_data>
  */
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub header: MessageHeader,
     pub body: Vec<u8>,
@@ -50,7 +50,7 @@ pub const RK_MATCH_TYPE_ALL: &str = "all";
 /// the keys specified in the router
 pub const RK_MATCH_TYPE_ANY: &str = "any";
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageHeader {
     /// this must be a unique name for the app. Typically, this is the container
     /// id, since each container must have a unique name, and every container

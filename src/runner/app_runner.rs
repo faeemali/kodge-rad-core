@@ -72,7 +72,7 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
     info!("Starting App Runner");
 
     info!("SLEEPING BEFORE STARTING APP. MUST CHANGE THIS!!!");
-    sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_secs(3)).await;
 
     let mut app_infos = match start_apps(&app_ctx).await {
         Ok(children) => children,
@@ -99,5 +99,7 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
                 }
             }
         }
+
+        sleep(Duration::from_millis(500)).await;
     }
 }
