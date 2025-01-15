@@ -26,6 +26,35 @@ pub struct Message {
     pub body: Vec<u8>,
 }
 
+impl Message {
+    //creates a basic message instance without routing key information
+    pub fn new(instance_id: &str, message_id: &str, msg_type: &str, body: &[u8]) -> Self {
+        Message {
+            header: MessageHeader {
+                instance_id: instance_id.to_string(),
+                rks: None,
+                rks_match_type: None,
+                message_id: message_id.to_string(),
+                msg_type: msg_type.to_string(),
+                extras: None,
+                length: body.len() as u32,
+            },
+            body: body.to_vec(),
+        }
+    }
+
+    //like new(), but expects body to be a serializable type
+    pub fn new_from_type<T>(instance_id: &str, message_id: &str, msg_type: &str, body: T)
+                            -> Result<Self, Box<dyn Error + Sync + Send>>
+    where
+        T: Serialize,
+    {
+        let body_bytes = serde_json::to_vec(&body)?;
+        let msg = Message::new(instance_id, message_id, msg_type, &body_bytes);
+        Ok(msg)
+    }
+}
+
 pub const HEADER: u8 = 0xAA;
 pub const FOOTER: u8 = 0x55;
 
@@ -52,17 +81,12 @@ pub const RK_MATCH_TYPE_ANY: &str = "any";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageHeader {
-    /// this must be a unique name for the app. Typically, this is the container
-    /// id, since each container must have a unique name, and every container
-    /// only runs/manages one app. It is important that the actual app name is not
-    /// used. For instance, if an app is called "echo" for instance, and the "echo"
+    /// this must be a unique name for the app i.e. the instance
+    /// id. It is important that the actual app name is not
+    /// used. For instance, if an app is called "echo" and the "echo"
     /// app is used several times in a workflow, the router will not know which
-    /// instance of "echo" to reference when routing messages. However, since
-    /// every copy of "echo" runs in a container with a unique id, but setting
-    /// the name to the container id, the router will be able to reference every
-    /// running instance of "echo" individually. The name, therefore, doubles
-    /// as an "instance id"
-    pub name: String,
+    /// instance of "echo" to reference when routing messages. 
+    pub instance_id: String,
 
     /// additional routing keys. May be empty
     pub rks: Option<Vec<String>>,
@@ -117,7 +141,7 @@ impl Protocol {
         self.calculated_crc = 0xFFFF;
         self.state = GetHeader;
     }
-    
+
     pub fn feed(&mut self, data: &[u8]) -> Vec<Message> {
         let mut ret = vec![];
         for b in data {
@@ -154,7 +178,7 @@ impl Protocol {
                         }
 
                         let msg_header = msg_header_res.unwrap();
-                        if !Validation::is_valid_name(&msg_header.name) || !Validation::is_valid_msg_type(&msg_header.msg_type) {
+                        if !Validation::is_valid_name(&msg_header.instance_id) || !Validation::is_valid_msg_type(&msg_header.msg_type) {
                             debug!("Invalid message name or type (protocol)");
                             self.reset();
                             continue;
@@ -170,7 +194,7 @@ impl Protocol {
                         self.header = Some(msg_header);
 
                         self.partial_reset();
-                        
+
                         if body_len == 0 {
                             self.state = GetCrc;
                         } else {

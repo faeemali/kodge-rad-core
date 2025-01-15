@@ -10,7 +10,7 @@ use crate::AppCtx;
 use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Route};
-use crate::control::message_types::ControlMessages::NewMessage;
+use crate::control::message_types::ControlMessages::{NewMessage, RegisterRoutes, RemoveRoutes};
 use crate::error::raderr;
 
 pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
@@ -19,9 +19,15 @@ pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
 
 async fn process_control_message(ctx: &mut RouterCtx, msg: ControlMessages) {
     match msg {
-        ControlMessages::RemoveRoutes(name) => {
-            info!("Disconnecting {} from the router", &name);
-            ctx.connections.remove(&name);
+        RegisterRoutes(req) => {
+            let instance_id = req.instance_id.clone();
+            ctx.connections.insert(instance_id.clone(), req);
+            info!("Registered routes for {}", &instance_id);
+        }
+        
+        RemoveRoutes(instance_id) => {
+            info!("Disconnecting {} from the router", &instance_id);
+            ctx.connections.remove(&instance_id);
 
             //do not remove the static routes. They are "static", unlike connections
             //which are dynamic
@@ -115,7 +121,7 @@ fn message_matches_routing_keys<'a>(msg: &Message, rt_rks_dsts_list: &'a [RksDst
     } else {
         /* match_type is none no routing keys to be matched. This message is valid, provided there's only one set of destinations */
         if rt_rks_dsts_list.len() != 1 {
-            debug!("Message being discarded because routing is ambiguous. {}/{} has multiple destination groups, but no routing key match type", &msg.header.name, &msg.header.msg_type);
+            debug!("Message being discarded because routing is ambiguous. {}/{} has multiple destination groups, but no routing key match type", &msg.header.instance_id, &msg.header.msg_type);
             return None;
         }
         Some(&rt_rks_dsts_list[0].dsts)
@@ -135,14 +141,14 @@ fn __match_route<'a>(msg: &Message, key: &str, val_opt: &Option<&'a Vec<RksDsts>
 ///gets the destination for a message. This searches the routes_map in ctx and looks for
 /// a route with a specific name, or a route marked as "*" which means accept all messages
 async fn __get_route_dst<'a>(ctx: &'a RouterCtx, msg: &Message) -> Option<&'a Vec<String>> {
-    let key = format!("{}/*", &msg.header.name);
+    let key = format!("{}/*", &msg.header.instance_id);
     let val_opt = ctx.routes_map.get(&key);
     let ret = __match_route(msg, &key, &val_opt);
     if ret.is_some() {
         return ret;
     }
 
-    let key = format!("{}/{}", &msg.header.name, &msg.header.msg_type);
+    let key = format!("{}/{}", &msg.header.instance_id, &msg.header.msg_type);
     let val_opt = ctx.routes_map.get(&key);
     let ret = __match_route(msg, &key, &val_opt);
     if ret.is_some() {
@@ -175,7 +181,7 @@ async fn process_connection_message(ctx: &RouterCtx, msg: Message) {
             }
         }
         None => {
-            debug!("Ignoring route for: {}/{}. Not found", &msg.header.name, &msg.header.msg_type);
+            debug!("Ignoring route for: {}/{}. Not found", &msg.header.instance_id, &msg.header.msg_type);
         }
     }
 }

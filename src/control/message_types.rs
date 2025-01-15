@@ -6,11 +6,10 @@ pub enum ControlMessages {
     NewConnection((SocketAddr, Sender<ControlMessages>)),
     Disconnected(SocketAddr),
     RegisterMessage((SocketAddr, RegisterMessageReq)),
-    RegisterConnection(RegisterMessageReq),
+    RegisterRoutes(RegisterMessageReq),
     RemoveRoutes(String),
     AppExit(String),
     NewMessage(Message),
-
 }
 
 #[derive(Clone)]

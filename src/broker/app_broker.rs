@@ -128,7 +128,6 @@ async fn read_socket_data(conn_ctx: &mut ConnectionCtx,
                         return raderr("Registration error");
                     }
 
-                    /* TODO wait for register response or the client will not have any response */
                     *state = WaitForRegistrationResponse;
                 }
                 

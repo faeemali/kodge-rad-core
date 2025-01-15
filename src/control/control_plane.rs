@@ -3,7 +3,10 @@ use std::error::Error;
 use std::net::SocketAddr;
 use log::{error, info, warn};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
+use crate::broker::protocol::{Message, MessageHeader};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
+use crate::control::message_types::ControlMessages::NewMessage;
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -51,7 +54,7 @@ fn disconnect(ctx: &mut CtrlCtx, key: &SocketAddr) -> Result<(), Box<dyn Error +
     Ok(())
 }
 
-fn find_connection_by_instance_id<'a>(ctx: &'a CtrlCtx, instance_id: &str) -> Option<(&'a SocketAddr, &'a ControlConn)>{
+fn find_connection_by_instance_id<'a>(ctx: &'a CtrlCtx, instance_id: &str) -> Option<(&'a SocketAddr, &'a ControlConn)> {
     for key in ctx.connections.keys() {
         let value = ctx.connections.get(key);
         if value.is_none() {
@@ -70,7 +73,7 @@ fn find_connection_by_instance_id<'a>(ctx: &'a CtrlCtx, instance_id: &str) -> Op
     None
 }
 
-fn find_connection_key_by_instance_id(ctx: &CtrlCtx, instance_id: &str) -> Option<(SocketAddr)>{
+fn find_connection_key_by_instance_id(ctx: &CtrlCtx, instance_id: &str) -> Option<(SocketAddr)> {
     for key in ctx.connections.keys() {
         let value = ctx.connections.get(key);
         if value.is_none() {
@@ -90,12 +93,12 @@ fn find_connection_key_by_instance_id(ctx: &CtrlCtx, instance_id: &str) -> Optio
 }
 
 //disconnects an existing connection if one exists
-fn disconnect_existing_connection(ctx: &mut  CtrlCtx, instance_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+fn disconnect_existing_connection(ctx: &mut CtrlCtx, instance_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     let kv_opt = find_connection_key_by_instance_id(ctx, instance_id);
     if let Some(key) = kv_opt {
         disconnect(ctx, &key)?;
     }
-    
+
     Ok(())
 }
 
@@ -103,20 +106,22 @@ async fn register_connection(ctx: &mut CtrlCtx,
                              addr: SocketAddr,
                              new_conn: RegisterMessageReq)
                              -> Result<(), Box<dyn Error + Sync + Send>> {
-    let instance_id = new_conn.instance_id.trim();
-    disconnect_existing_connection(ctx, instance_id)?;
-    
+    let instance_id = new_conn.instance_id.clone();
+    disconnect_existing_connection(ctx, &instance_id)?;
+
     if let Some(val) = ctx.connections.get_mut(&addr) {
-            val.data = Some(new_conn.clone());
+        val.data = Some(new_conn.clone());
+        info!("Registered connection: {}", &instance_id);
+
+        /* notify the router */
+        ctx.router_tx.send(ControlMessages::RegisterRoutes(new_conn)).await?;
+
+        let resp = Message::new_from_type(&instance_id, "", MSG_TYPE_AUTH_RESP, AuthMessageResp {success: true})?;
+        val.conn_tx.send(NewMessage(resp)).await?;
+        Ok(())
     } else {
-        return raderr("Unexpected error. Unable to register connection. Connection socket info does not exist");
+        raderr("Unexpected error. Unable to register connection. Connection socket info does not exist")
     }
-    info!("Registered connection: {}", instance_id);
-
-    /* notify the router */
-    ctx.router_tx.send(ControlMessages::RegisterConnection(new_conn)).await?;
-
-    Ok(())
 }
 
 fn add_new_connection(ctx: &mut CtrlCtx, addr: SocketAddr, conn_tx: Sender<ControlMessages>) {
@@ -139,16 +144,15 @@ pub async fn ctrl_main(ctx: CtrlCtx,
         match msg_opt {
             Some(m) => {
                 match m {
-                    ControlMessages::RegisterMessage((addr, new_conn)) => {
-                        if let Err(e) = register_connection(&mut ctx, addr, new_conn).await {
-                            error!("Error registering connection: {}", &e);
-                            break;
-                        }
-                    }
-
                     /* new connection from the broker */
                     ControlMessages::NewConnection((addr, conn_tx)) => {
                         add_new_connection(&mut ctx, addr, conn_tx);
+                    }
+
+                    ControlMessages::RegisterMessage((addr, msg_info)) => {
+                        if let Err(e) = register_connection(&mut ctx, addr, msg_info).await {
+                            panic!("Error registering connection: {}", &e);
+                        }
                     }
 
                     ControlMessages::Disconnected(addr) => {
