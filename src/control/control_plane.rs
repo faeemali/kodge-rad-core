@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
-use crate::control::message_types::ControlMessages::{NewMessage, Registered};
+use crate::control::message_types::ControlMessages::{NewMessage, Registered, RemoveRoutes};
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -148,7 +148,8 @@ pub async fn ctrl_main(ctx: CtrlCtx,
 
     let mut ctx = ctx;
     let mut rx = rx;
-    loop {
+    let mut done = false;
+    while !done {
         /* todo handle must die */
         let msg_opt = rx.recv().await;
         let m = match msg_opt {
@@ -173,7 +174,15 @@ pub async fn ctrl_main(ctx: CtrlCtx,
             ControlMessages::Disconnected(addr) => {
                 info!("Disconnecting connection: {}", &addr);
 
-                /* todo must notify router to remove routes */
+                if let Some(conn) = ctx.connections.get(&addr) {
+                    if let Some(data) = &conn.data {
+                        if ctx.router_tx.send(RemoveRoutes(data.instance_id.clone())).await.is_err() {
+                            send_must_die_msgs(&mut ctx).await;
+                            done = true;
+                        }
+                    }
+                }
+                
                 ctx.connections.remove(&addr);
             }
             
@@ -181,6 +190,7 @@ pub async fn ctrl_main(ctx: CtrlCtx,
                 /* forward to router */
                 if ctx.router_tx.send(NewMessage(msg)).await.is_err() {
                     send_must_die_msgs(&mut ctx).await;
+                    done = true;
                 }
             }
             
@@ -188,6 +198,8 @@ pub async fn ctrl_main(ctx: CtrlCtx,
                 if let Some((_, conn)) = find_connection_by_instance_id(&ctx, &instance_id) {
                     if let Err(e) = conn.conn_tx.send(NewMessage(msg)).await {
                         error!("Error sending message to {}: {}", &instance_id, &e);
+                        send_must_die_msgs(&mut ctx).await;
+                        done = true;
                     }
                 } else {
                     error!("Connection not found for instance_id: {}", &instance_id);
