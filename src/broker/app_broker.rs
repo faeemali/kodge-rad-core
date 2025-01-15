@@ -16,10 +16,10 @@ use crate::broker::auth::{authenticate};
 use crate::broker::auth_types::{AuthMessageReq, MSG_TYPE_AUTH};
 use crate::broker::app_broker::States::{AuthenticateAndRegister, Process, WaitForRegistrationResponse};
 use crate::broker::protocol::{Message, Protocol};
-use crate::control::message_types::ControlMessages::{AppExit, Disconnected, NewConnection, NewMessage, RegisterMessage, Registered};
+use crate::control::message_types::ControlMessages::{MustDie, BrokerReady, Disconnected, NewConnection, NewMessage, RegisterMessage, Registered};
 use crate::control::message_types::{ControlMessages, RegisterMessageReq};
 use crate::error::{raderr};
-use crate::utils::rad_utils::get_value_or_unknown;
+use crate::utils::rad_utils::{get_value_or_unknown, send_must_die};
 use crate::utils::timer::Timer;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -226,7 +226,7 @@ async fn process_connection(mut sock: TcpStream,
         match conn_rx.try_recv() {
             Ok(m) => {
                 match m {
-                    AppExit(s) => {
+                    MustDie(s) => {
                         let mut m = format!("Connection caught must die signal. {}", &s);
                         if let Some(instance_id) = &conn_ctx.instance_id {
                             m.push_str(format!(" instance_id={}", instance_id).as_str());
@@ -321,7 +321,7 @@ async fn accept_connection(listener: &TcpListener, ctrl_tx: Sender<ControlMessag
     if let Err(e) = &res {
         let msg = format!("Error accepting connection: {}. Aborting", &e);
         error!("{}", &msg);
-        let _ = ctrl_tx.send(AppExit(msg.to_string())).await;
+        let _ = ctrl_tx.send(MustDie(msg.to_string())).await;
         return raderr(msg);
     }
 
@@ -342,7 +342,7 @@ async fn handle_ctrl_messages(broker_rx: &mut Receiver<ControlMessages>) -> bool
     };
 
     match msg {
-        AppExit(s) => {
+        MustDie(s) => {
             info!("Broker caught must_die flag. Exiting");
             return true;
         }
@@ -362,10 +362,14 @@ pub async fn broker_main(app_ctx: Arc<AppCtx>,
         Err(e) => {
             let msg = format!("Error starting tcp listener: {}", &e);
             error!("{}", &msg);
-            let _ = ctrl_tx.send(ControlMessages::AppExit(msg.to_string())).await;
+            send_must_die(ctrl_tx.clone(), &msg).await;
             return;
         }
     };
+    
+    if ctrl_tx.send(BrokerReady).await.is_err() {
+        send_must_die(ctrl_tx.clone(), "Error sending broker ready message").await;
+    }
 
     let mut broker_rx = broker_rx;
     let mut done = false;

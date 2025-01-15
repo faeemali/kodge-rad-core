@@ -6,11 +6,15 @@ use std::path::Path;
 use base64::DecodeError;
 use base64::prelude::*;
 use flate2::read::GzDecoder;
+use log::error;
 use serde::de::DeserializeOwned;
 use tar::Archive;
 use crate::error::raderr;
 use crate::utils::rad_utils::TokenType::{Name, Variable, Version};
 use sha2::{Sha256, Digest};
+use tokio::sync::mpsc::Sender;
+use crate::control::message_types::ControlMessages;
+use crate::control::message_types::ControlMessages::MustDie;
 
 pub fn get_value_or_unknown(opt: &Option<String>) -> String {
     match opt {
@@ -303,4 +307,10 @@ pub fn calculate_sha256(file_path: &str) -> io::Result<String> {
     // Finalize the hash and convert it to a hexadecimal string
     let hash_result = hasher.finalize();
     Ok(format!("{:x}", hash_result).to_lowercase())
+}
+
+pub async fn send_must_die(ctrl_tx: Sender<ControlMessages>, msg: &str) {
+    if ctrl_tx.send(MustDie(msg.into())).await.is_err() {
+        error!("Failed to send must_die message to control thread");
+    }
 }

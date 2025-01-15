@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{channel, Sender, Receiver};
 use tokio::time::sleep;
@@ -66,13 +66,36 @@ async fn start_apps<'a>(app_ctx: &'a Arc<AppCtx>) -> Result<Vec<RunningAppInfo<'
     Ok(children)
 }
 
+//wait until the broker is ready, then return true. If a must_die message was received,
+//return false
+async fn wait_for_broker_ready(rx: &mut Receiver<ControlMessages>) -> bool {
+    loop {
+        if let Some(msg) = rx.recv().await {
+            match msg {
+                ControlMessages::BrokerReady => {
+                    return true;
+                }
+                ControlMessages::MustDie(m) => {
+                    info!("App runner caught must die message: {}", &m);
+                    return false;
+                }
+                _ => {}
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
 pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
                              rx: Receiver<ControlMessages>,
                              ctrl_tx: Sender<ControlMessages>) {
     info!("Starting App Runner");
 
-    info!("SLEEPING BEFORE STARTING APP. MUST CHANGE THIS!!!");
-    sleep(Duration::from_secs(3)).await;
+    let mut rx = rx;
+    if !wait_for_broker_ready(&mut rx).await {
+        warn!("App runner caught must die flag while waiting for broker to become ready. Aborting");
+        return;
+    }
 
     let mut app_infos = match start_apps(&app_ctx).await {
         Ok(children) => children,

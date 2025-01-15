@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
-use crate::control::message_types::ControlMessages::{NewMessage, Registered, RemoveRoutes};
+use crate::control::message_types::ControlMessages::{BrokerReady, NewMessage, Registered, RemoveRoutes};
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -138,7 +138,7 @@ fn add_new_connection(ctx: &mut CtrlCtx, addr: SocketAddr, conn_tx: Sender<Contr
 }
 
 // notify all subsystems that they must die
-async fn send_must_die_msgs(ctx: &mut CtrlCtx) {
+async fn send_must_die_msgs(ctx: &mut CtrlCtx, msg: &str) {
     todo!()
 }
 
@@ -150,7 +150,6 @@ pub async fn ctrl_main(ctx: CtrlCtx,
     let mut rx = rx;
     let mut done = false;
     while !done {
-        /* todo handle must die */
         let msg_opt = rx.recv().await;
         let m = match msg_opt {
             Some(m) => m,
@@ -160,6 +159,11 @@ pub async fn ctrl_main(ctx: CtrlCtx,
         };
 
         match m {
+            ControlMessages::MustDie(msg) => {
+                info!("Received MustDie message: {}", msg);
+                send_must_die_msgs(&mut ctx, &msg).await;
+            }
+
             /* new connection from the broker */
             ControlMessages::NewConnection((addr, conn_tx)) => {
                 add_new_connection(&mut ctx, addr, conn_tx);
@@ -176,8 +180,9 @@ pub async fn ctrl_main(ctx: CtrlCtx,
 
                 if let Some(conn) = ctx.connections.get(&addr) {
                     if let Some(data) = &conn.data {
-                        if ctx.router_tx.send(RemoveRoutes(data.instance_id.clone())).await.is_err() {
-                            send_must_die_msgs(&mut ctx).await;
+                        let instance_id = data.instance_id.clone();
+                        if ctx.router_tx.send(RemoveRoutes(instance_id.clone())).await.is_err() {
+                            send_must_die_msgs(&mut ctx, format!("Error removing routes for {}", &instance_id).as_str()).await;
                             done = true;
                         }
                     }
@@ -189,7 +194,7 @@ pub async fn ctrl_main(ctx: CtrlCtx,
             NewMessage(msg) => {
                 /* forward to router */
                 if ctx.router_tx.send(NewMessage(msg)).await.is_err() {
-                    send_must_die_msgs(&mut ctx).await;
+                    send_must_die_msgs(&mut ctx, "Error forwarding message to router").await;
                     done = true;
                 }
             }
@@ -197,12 +202,20 @@ pub async fn ctrl_main(ctx: CtrlCtx,
             ControlMessages::RouteDstMessage((instance_id, msg)) => {
                 if let Some((_, conn)) = find_connection_by_instance_id(&ctx, &instance_id) {
                     if let Err(e) = conn.conn_tx.send(NewMessage(msg)).await {
-                        error!("Error sending message to {}: {}", &instance_id, &e);
-                        send_must_die_msgs(&mut ctx).await;
+                        let msg = format!("Error sending message to {}: {}", &instance_id, &e); 
+                        error!("{}", &msg);
+                        send_must_die_msgs(&mut ctx, &msg).await;
                         done = true;
                     }
                 } else {
                     error!("Connection not found for instance_id: {}", &instance_id);
+                }
+            }
+            
+            BrokerReady => {
+                if ctx.app_runner_tx.send(BrokerReady).await.is_err() {
+                    let msg = "Error sending broker ready message";
+                    send_must_die_msgs(&mut ctx, msg).await;        
                 }
             }
 

@@ -9,9 +9,10 @@ pub enum ControlMessages {
     Registered,
     RegisterRoutes(RegisterMessageReq),
     RemoveRoutes(String),
-    AppExit(String),
+    MustDie(String),
     NewMessage(Message),
-    RouteDstMessage((String, Message)) //route to dst based on instance id
+    RouteDstMessage((String, Message)), //route to dst based on instance id
+    BrokerReady,
 }
 
 #[derive(Clone)]
