@@ -366,7 +366,7 @@ pub async fn broker_main(app_ctx: Arc<AppCtx>,
             return;
         }
     };
-    
+
     if ctrl_tx.send(BrokerReady).await.is_err() {
         send_must_die(ctrl_tx.clone(), "Error sending broker ready message").await;
     }

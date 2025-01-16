@@ -36,9 +36,9 @@ pub fn control_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
 }
 
 fn disconnect(ctx: &mut CtrlCtx, key: &SocketAddr) -> Result<(), Box<dyn Error + Sync + Send>> {
-    match ctx.connections.get(key) {
+    match ctx.connections.remove(key) {
         Some(conn) => {
-            /* todo fix me */
+            /* todo fix me - send message to connection*/
             //conn.conn_ctrl_tx.send(DisconnectMessage(name.to_string())).await?;
 
             /* todo: fixme send a message to the router to remove routes */
