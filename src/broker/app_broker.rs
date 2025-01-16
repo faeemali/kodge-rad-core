@@ -3,7 +3,7 @@ use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::{Arc};
 use std::time::Duration;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::io::{Interest};
 use tokio::net::{TcpListener, TcpStream};
@@ -245,6 +245,13 @@ async fn process_connection(mut sock: TcpStream,
                     NewMessage(msg) => {
                         /* track messages to be sent back to the client */
                         tx_msgs.push(msg);
+                    }
+                    
+                    Disconnected(addr ) => {
+                        let instance_id = get_value_or_unknown(&conn_ctx.instance_id);
+                        warn!("Disconnected message received for {} ({}). Closing connection", addr, instance_id);
+                        done = true;
+                        continue;
                     }
 
                     _ => {}

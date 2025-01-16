@@ -4,9 +4,9 @@ use std::net::SocketAddr;
 use log::{error, info, warn};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
-use crate::broker::protocol::{Message, MessageHeader};
+use crate::broker::protocol::{Message};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
-use crate::control::message_types::ControlMessages::{BrokerReady, MustDie, NewMessage, Registered, RemoveRoutes};
+use crate::control::message_types::ControlMessages::{BrokerReady, Disconnected, MustDie, NewConnection, NewMessage, RegisterMessage, Registered, RemoveRoutes, RouteDstMessage};
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -33,25 +33,6 @@ impl CtrlCtx {
 
 pub fn control_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
     channel(32)
-}
-
-fn disconnect(ctx: &mut CtrlCtx, key: &SocketAddr) -> Result<(), Box<dyn Error + Sync + Send>> {
-    match ctx.connections.remove(key) {
-        Some(conn) => {
-            /* todo fix me - send message to connection*/
-            //conn.conn_ctrl_tx.send(DisconnectMessage(name.to_string())).await?;
-
-            /* todo: fixme send a message to the router to remove routes */
-            //ctx.router_tx.send(RemoveRoutes(name.to_string())).await?;
-        }
-        None => {
-            return Ok(());
-        }
-    }
-
-    ctx.connections.remove(key);
-
-    Ok(())
 }
 
 fn find_connection_by_instance_id<'a>(ctx: &'a CtrlCtx, instance_id: &str) -> Option<(&'a SocketAddr, &'a ControlConn)> {
@@ -83,7 +64,7 @@ fn find_connection_key_by_instance_id(ctx: &CtrlCtx, instance_id: &str) -> Optio
 
         if let Some(d) = &value.data {
             if d.instance_id == instance_id {
-                return Some(key.clone());
+                return Some(*key);
             }
         } else {
             continue;
@@ -92,11 +73,26 @@ fn find_connection_key_by_instance_id(ctx: &CtrlCtx, instance_id: &str) -> Optio
     None
 }
 
+async fn disconnect(ctx: &mut CtrlCtx, key: &SocketAddr)  {
+    if let Some(conn) = ctx.connections.remove(key) {
+        //notify connection. If the disconnect originated
+        //from the connection, the channel may be closed, so
+        //ignore errors
+        let _ = conn.conn_tx.send(Disconnected(*key)).await;
+
+        if let Some(data) = &conn.data {                let instance_id = &data.instance_id;
+            if ctx.router_tx.send(RemoveRoutes(instance_id.to_string())).await.is_err() {
+                send_must_die_msgs(ctx, format!("Error removing routes for {} on disconnect", instance_id).as_str()).await;
+            }
+        }
+    }
+}
+
 //disconnects an existing connection if one exists
-fn disconnect_existing_connection(ctx: &mut CtrlCtx, instance_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn disconnect_existing_connection(ctx: &mut CtrlCtx, instance_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
     let kv_opt = find_connection_key_by_instance_id(ctx, instance_id);
     if let Some(key) = kv_opt {
-        disconnect(ctx, &key)?;
+        disconnect(ctx, &key).await;
     }
 
     Ok(())
@@ -107,7 +103,7 @@ async fn register_connection(ctx: &mut CtrlCtx,
                              new_conn: RegisterMessageReq)
                              -> Result<(), Box<dyn Error + Sync + Send>> {
     let instance_id = new_conn.instance_id.clone();
-    disconnect_existing_connection(ctx, &instance_id)?;
+    disconnect_existing_connection(ctx, &instance_id).await?;
 
     if let Some(val) = ctx.connections.get_mut(&addr) {
         val.data = Some(new_conn.clone());
@@ -139,6 +135,10 @@ fn add_new_connection(ctx: &mut CtrlCtx, addr: SocketAddr, conn_tx: Sender<Contr
 
 // notify all subsystems that they must die
 async fn send_must_die_msgs(ctx: &mut CtrlCtx, msg: &str) {
+    for (_, conn) in &ctx.connections {
+        let _ = conn.conn_tx.send(MustDie(msg.into())).await;
+    }
+    
     let _ = ctx.broker_tx.send(MustDie(msg.into())).await;
     let _ = ctx.router_tx.send(MustDie(msg.into())).await;
     let _ = ctx.app_runner_tx.send(MustDie(msg.into())).await;
@@ -162,23 +162,23 @@ pub async fn ctrl_main(ctx: CtrlCtx,
         };
 
         match m {
-            ControlMessages::MustDie(msg) => {
+            MustDie(msg) => {
                 info!("Received MustDie message: {}", msg);
                 send_must_die_msgs(&mut ctx, &msg).await;
             }
 
             /* new connection from the broker */
-            ControlMessages::NewConnection((addr, conn_tx)) => {
+            NewConnection((addr, conn_tx)) => {
                 add_new_connection(&mut ctx, addr, conn_tx);
             }
 
-            ControlMessages::RegisterMessage((addr, msg_info)) => {
+            RegisterMessage((addr, msg_info)) => {
                 if let Err(e) = register_connection(&mut ctx, addr, msg_info).await {
                     panic!("Error registering connection: {}", &e);
                 }
             }
 
-            ControlMessages::Disconnected(addr) => {
+            Disconnected(addr) => {
                 info!("Disconnecting connection: {}", &addr);
 
                 if let Some(conn) = ctx.connections.get(&addr) {
@@ -202,7 +202,7 @@ pub async fn ctrl_main(ctx: CtrlCtx,
                 }
             }
             
-            ControlMessages::RouteDstMessage((instance_id, msg)) => {
+            RouteDstMessage((instance_id, msg)) => {
                 if let Some((_, conn)) = find_connection_by_instance_id(&ctx, &instance_id) {
                     if let Err(e) = conn.conn_tx.send(NewMessage(msg)).await {
                         let msg = format!("Error sending message to {}: {}", &instance_id, &e);
