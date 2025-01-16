@@ -1,10 +1,12 @@
 use std::error::Error;
 use std::sync::{Arc};
+use futures::future::join_all;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener};
 use tokio::{select};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::task::JoinHandle;
 use crate::AppCtx;
 use crate::broker::broker_types::ConnectionCtx;
 use crate::broker::connection::connection_main;
@@ -30,7 +32,7 @@ pub fn broker_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
     channel(32)
 }
 
-async fn accept_connection(listener: &TcpListener, ctrl_tx: Sender<ControlMessages>) -> Result<(), Box<dyn Error + Sync + Send>> {
+async fn accept_connection(listener: &TcpListener, ctrl_tx: Sender<ControlMessages>) -> Result<JoinHandle<Result<(), Box<dyn Error + Sync + Send>>>, Box<dyn Error + Sync + Send>> {
     let res = listener.accept().await;
     if let Err(e) = &res {
         let msg = format!("Error accepting connection: {}. Aborting", &e);
@@ -41,10 +43,10 @@ async fn accept_connection(listener: &TcpListener, ctrl_tx: Sender<ControlMessag
 
 
     let (sock, addr) = res.unwrap();
-    tokio::spawn(connection_main(sock,
-                                 addr,
-                                 ctrl_tx.clone()));
-    Ok(())
+    let handle = tokio::spawn(connection_main(sock,
+                                              addr,
+                                              ctrl_tx.clone()));
+    Ok(handle)
 }
 
 async fn handle_ctrl_messages(broker_rx: &mut Receiver<ControlMessages>) -> bool {
@@ -82,14 +84,21 @@ pub async fn broker_main(app_ctx: Arc<AppCtx>,
         send_must_die(ctrl_tx.clone(), "Error sending broker ready message").await;
     }
 
+    let mut app_handles = vec![];
     let mut broker_rx = broker_rx;
     let mut done = false;
     while !done {
         println!("looping");
         select! {
             accept_res = accept_connection(&listener, ctrl_tx.clone()) => {
-                if let Err(e) = accept_res {
-                    println!("Accept error: {}", e);
+                match accept_res {
+                    Ok(handle) => {
+                        app_handles.push(handle);
+                    }
+
+                    Err(e) => {
+                        println!("Accept error: {}", e);
+                    }
                 }
             }
 
@@ -101,6 +110,10 @@ pub async fn broker_main(app_ctx: Arc<AppCtx>,
         } //select
     } //while
 
-    info!("Broker cleanup in progress");
+    info!("Waiting for apps to exit");
+    join_all(app_handles).await;
+    info!("All apps terminated");
+
+    info!("Broker terminated");
     drop(listener);
 }

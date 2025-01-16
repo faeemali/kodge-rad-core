@@ -3,9 +3,10 @@ use std::error::Error;
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
+use futures::future::join_all;
 use tokio::sync::{RwLock};
 use log::{info, warn};
-use tokio::spawn;
+use tokio::{signal, spawn};
 use tokio::time::sleep;
 use crate::broker::app_broker::{broker_init, broker_main};
 use crate::client::apps::{update_manifest, init_cache, show_manifest_summary, read_manifest, get_app, get_apps};
@@ -13,12 +14,11 @@ use crate::config::config::{Config};
 use crate::control::control_plane::{control_init, ctrl_main, CtrlCtx};
 use runner::app_runner::{app_runner_init, app_runner_main};
 use crate::router::router::{router_init, router_main};
-use crate::utils::rad_utils::{get_system_info, SystemInfo};
+use crate::utils::rad_utils::{get_system_info, send_must_die, SystemInfo};
 
 mod utils;
 mod error;
 mod config;
-mod process;
 mod broker;
 mod client;
 mod control;
@@ -39,10 +39,6 @@ fn show_help(app_name: &str) {
     println!("  update           Retrieves and saves the latest app information");
     println!("  list             Lists a summary of all available applications");
     println!("  get              Downloads all apps for the specified workflow");
-}
-
-async fn handle_signal(app_ctx: Arc<AppCtx>) {
-    warn!("Caught signal. Aborting app");
 }
 
 async fn process_commands(app_ctx: Arc<AppCtx>, opts: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -104,8 +100,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         exit(0);
     }
 
-    ctrlc_async::set_async_handler(handle_signal(a_app_ctx.clone()))?;
-
     let (app_runner_tx, app_runner_rx) = app_runner_init();
     let (router_tx, router_rx) = router_init();
     let (broker_tx, broker_rx) = broker_init();
@@ -115,26 +109,29 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     info!("base_dir: {}", base_dir);
 
     /* start all modules */
-    spawn(broker_main(a_app_ctx.clone(),
-                      broker_rx,
-                      ctrl_tx.clone()));
-    spawn(app_runner_main(a_app_ctx.clone(),
-                          app_runner_rx,
-                          ctrl_tx.clone()));
-    spawn(router_main(a_app_ctx.clone(),
-                      router_rx,
-                      ctrl_tx.clone()));
+    let handles = [
+        spawn(broker_main(a_app_ctx.clone(),
+                          broker_rx,
+                          ctrl_tx.clone())),
+        spawn(app_runner_main(a_app_ctx.clone(),
+                              app_runner_rx,
+                              ctrl_tx.clone())),
+        spawn(router_main(a_app_ctx.clone(),
+                          router_rx,
+                          ctrl_tx.clone()))];
 
     let ctrl_ctx = CtrlCtx::new(router_tx,
                                 app_runner_tx,
                                 broker_tx);
     spawn(ctrl_main(ctrl_ctx, ctrl_rx));
 
-    loop {
-        sleep(Duration::from_millis(1000)).await;
-    }
-
+    signal::ctrl_c().await.unwrap();
 
     info!("Main app exiting");
-    exit(0);
+    send_must_die(ctrl_tx.clone(), "Caught ctrl+c").await;
+    
+    join_all(handles).await;
+    info!("Main app exited");
+
+    Ok(())
 }

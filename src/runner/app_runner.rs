@@ -4,13 +4,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{error, info, warn};
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{channel, Sender, Receiver};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::time::sleep;
 use crate::AppCtx;
 use crate::client::apps::{get_app_base_directory, get_manifest_entry_for_app};
 use crate::config::config::App;
 use crate::control::message_types::ControlMessages;
+use crate::control::message_types::ControlMessages::{MustDie, BrokerReady};
+use crate::utils::timer::Timer;
 
 pub struct RunningAppInfo<'a> {
     pub app: &'a App,
@@ -72,16 +77,55 @@ async fn wait_for_broker_ready(rx: &mut Receiver<ControlMessages>) -> bool {
     loop {
         if let Some(msg) = rx.recv().await {
             match msg {
-                ControlMessages::BrokerReady => {
+                BrokerReady => {
                     return true;
                 }
-                ControlMessages::MustDie(m) => {
+                MustDie(m) => {
                     info!("App runner caught must die message: {}", &m);
                     return false;
                 }
                 _ => {}
             }
             sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+async fn force_stop_apps<'a>(apps: &mut [RunningAppInfo<'a>], duration: Duration) {
+    let timer = Timer::new(duration);
+    loop {
+        let mut running = false;
+        for j in 0..apps.len() {
+            let app = &mut apps[j];
+            let child = &mut app.child;
+            if let Ok(res) = child.try_wait() {
+                if res.is_none() && timer.timed_out() {
+                    running = true;
+                    warn!("Force killing app: {}", app.app.instance_id);
+                    let _ = child.kill().await;
+                }
+            }
+        } //for
+
+        if !running {
+            info!("All apps stopped");
+            break;
+        }
+    }
+}
+
+async fn signal_all_apps_to_stop(apps: &mut [RunningAppInfo<'_>]) {
+    for j in 0..apps.len() {
+        let app = &apps[j];
+        let child = &app.child;
+        let pid_opt = child.id();
+        if let Some(pid) = pid_opt {
+            let unix_pid = Pid::from_raw(pid as i32);
+
+            info!("Sending SIGHUP to {}, pid={}", &app.app.instance_id, unix_pid);
+            if let Err(e) = kill(unix_pid, Signal::SIGHUP) {
+                error!("Failed to send SIGHUP signal to process {}. Error: {}", unix_pid, e);
+            }
         }
     }
 }
@@ -106,23 +150,49 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
 
     let mut done = false;
     while !done {
+        match rx.try_recv() {
+            Ok(msg) => {
+                if let MustDie(msg) = msg {
+                    info!("app runner caught must die flag ({}). Aborting", &msg);
+                    signal_all_apps_to_stop(&mut app_infos).await;
+                    done = true;
+                    continue;
+                }
+            }
+
+            Err(e) => {
+                if e == TryRecvError::Disconnected {
+                    panic!("App runner detected control plane disconnected. Aborting");
+                }
+            }
+        }
+
+        let mut must_stop_all_apps = false;
         for app_info in &mut app_infos {
             let child = &mut app_info.child;
             match child.try_wait() {
                 Ok(status_opt) => {
                     if let Some(status) = status_opt {
-                        info!("App {} exited with status {}", app_info.app.name, status);
-
-                        /* TODO: notify all other apps that they must die */
-                        done = true;
+                        info!("App {} exited with status {}", app_info.app.instance_id, status);
+                        must_stop_all_apps = true;
+                        break;
                     } //else app has not yet exited
                 }
                 Err(e) => {
-                    error!("Error determining status of app instance: {}", &app_info.app.instance_id);
+                    error!("Error determining status of app instance: {}. Error: {}", &app_info.app.instance_id, &e);
                 }
             }
         }
 
-        sleep(Duration::from_millis(500)).await;
+        if must_stop_all_apps {
+            signal_all_apps_to_stop(&mut app_infos).await;
+            force_stop_apps(&mut app_infos, Duration::from_millis(5000)).await;
+            done = true;
+            continue;
+        }
+
+        sleep(Duration::from_millis(50)).await;
     }
+
+    info!("App runner stopped");
 }
