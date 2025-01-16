@@ -3,7 +3,7 @@ use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::time::Duration;
 use log::{debug, error, info, warn};
-use tokio::io::Interest;
+use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -127,27 +127,7 @@ async fn write_socket_data(sock: &mut TcpStream, msgs: &mut Vec<Message>) -> Res
         let encoded_slice = encoded_msg.as_slice();
 
         //debug!("Broker writing: {:?}", &encoded_slice);
-
-        let mut pos = 0usize;
-        loop {
-            /* todo consider replacing this with write_all() */
-            let res = sock.try_write(&encoded_slice[pos..]);
-            match res {
-                Ok(n) => {
-                    pos = n;
-                    if pos == encoded_slice.len() {
-                        break; //break out of the write loop
-                    }
-                }
-                Err(ref e) if e.kind() == WouldBlock => {
-                    continue;
-                }
-
-                Err(e) => {
-                    return raderr(format!("Write error detected. Aborting. Error: {}", &e).as_str());
-                }
-            }
-        }
+        sock.write_all(encoded_slice).await?;
     }
 
     /* cleanup */
