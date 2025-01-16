@@ -12,13 +12,16 @@ use crate::broker::protocol::{Message, RK_MATCH_TYPE_ALL, RK_MATCH_TYPE_ANY};
 use crate::config::config::{Route};
 use crate::control::message_types::ControlMessages::{NewMessage, RegisterRoutes, RemoveRoutes, RouteDstMessage};
 use crate::error::raderr;
+use crate::utils::rad_utils::send_must_die;
 
 pub fn router_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>) {
     channel::<ControlMessages>(32)
 }
 
-//process messages received from the control plane
-async fn process_control_message(ctx: &mut RouterCtx, ctrl_tx: Sender<ControlMessages>, msg: ControlMessages) {
+//process messages received from the control plane. Returns true if
+//app must be aborted, false otherwise
+async fn process_control_message(ctx: &mut RouterCtx, ctrl_tx: Sender<ControlMessages>, msg: ControlMessages) -> bool {
+    let mut must_abort = false;
     match msg {
         RegisterRoutes(req) => {
             let instance_id = req.instance_id.clone();
@@ -39,10 +42,15 @@ async fn process_control_message(ctx: &mut RouterCtx, ctrl_tx: Sender<ControlMes
             handle_message_routing(ctx, ctrl_tx.clone(), msg).await;
         }
 
-        _ => {
-            todo!()
+        ControlMessages::MustDie(msg) => {
+            warn!("Router caught must die message: {}. Aborting", &msg);
+            must_abort = true;
         }
+
+        _ => {}
     }
+
+    must_abort
 }
 
 /// checks if the message can be sent to the destinations specified in rksdsts by
@@ -295,22 +303,29 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
         routes_map,
     };
 
+    let mut done = false;
     let mut router_rx = router_rx;
-    loop {
-        /* todo handle must die */
+    while !done {
         let mut busy = false;
-
 
         //process messages from the control plane
         match router_rx.try_recv() {
             Ok(msg) => {
-                process_control_message(&mut ctx, ctrl_tx.clone(), msg).await;
+                let must_abort = process_control_message(&mut ctx, ctrl_tx.clone(), msg).await;
+                if must_abort {
+                    done = true;
+                    continue;
+                }
+
                 busy = true;
             }
+
             Err(e) => {
                 if e == TryRecvError::Disconnected {
                     error!("Router control disconnect detected. Aborting");
-                    break;
+                    send_must_die(ctrl_tx.clone(), "Error reading routing message from control plane").await;
+                    done = true;
+                    continue;
                 }
             }
         }
@@ -320,7 +335,5 @@ pub async fn router_main(app_ctx: Arc<AppCtx>,
         }
     }
 
-    error!("Router error detected. Aborting");
-
-    /* todo handle must die */
+    info!("Router terminated");
 }

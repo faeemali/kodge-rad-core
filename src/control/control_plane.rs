@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::broker::auth_types::{AuthMessageResp, MSG_TYPE_AUTH_RESP};
 use crate::broker::protocol::{Message, MessageHeader};
 use crate::control::message_types::{ControlConn, ControlMessages, RegisterMessageReq};
-use crate::control::message_types::ControlMessages::{BrokerReady, NewMessage, Registered, RemoveRoutes};
+use crate::control::message_types::ControlMessages::{BrokerReady, MustDie, NewMessage, Registered, RemoveRoutes};
 use crate::error::raderr;
 use crate::utils::rad_utils::get_datetime_as_utc_millis;
 
@@ -139,7 +139,10 @@ fn add_new_connection(ctx: &mut CtrlCtx, addr: SocketAddr, conn_tx: Sender<Contr
 
 // notify all subsystems that they must die
 async fn send_must_die_msgs(ctx: &mut CtrlCtx, msg: &str) {
-    todo!()
+    let _ = ctx.broker_tx.send(MustDie(msg.into())).await;
+    let _ = ctx.router_tx.send(MustDie(msg.into())).await;
+    let _ = ctx.app_runner_tx.send(MustDie(msg.into())).await;
+    warn!("must_die notification sent to all subsystems");
 }
 
 pub async fn ctrl_main(ctx: CtrlCtx,
@@ -202,7 +205,7 @@ pub async fn ctrl_main(ctx: CtrlCtx,
             ControlMessages::RouteDstMessage((instance_id, msg)) => {
                 if let Some((_, conn)) = find_connection_by_instance_id(&ctx, &instance_id) {
                     if let Err(e) = conn.conn_tx.send(NewMessage(msg)).await {
-                        let msg = format!("Error sending message to {}: {}", &instance_id, &e); 
+                        let msg = format!("Error sending message to {}: {}", &instance_id, &e);
                         error!("{}", &msg);
                         send_must_die_msgs(&mut ctx, &msg).await;
                         done = true;
@@ -211,20 +214,18 @@ pub async fn ctrl_main(ctx: CtrlCtx,
                     error!("Connection not found for instance_id: {}", &instance_id);
                 }
             }
-            
+
             BrokerReady => {
                 if ctx.app_runner_tx.send(BrokerReady).await.is_err() {
                     let msg = "Error sending broker ready message";
-                    send_must_die_msgs(&mut ctx, msg).await;        
+                    send_must_die_msgs(&mut ctx, msg).await;
                 }
             }
 
             _ => {
-                todo!();
             }
         }
     }
 
-    warn!("Broker receiver closed. Aborting");
-    /* todo handle must die */
+    info!("Control plane terminated");
 }
