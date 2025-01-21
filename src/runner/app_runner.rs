@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -26,11 +27,59 @@ pub fn app_runner_init() -> (Sender<ControlMessages>, Receiver<ControlMessages>)
     channel::<ControlMessages>(10)
 }
 
+//given arg, which is a string potentially containing one or
+//more variables (where the variable names are the keys of "replacements",
+//this function replaces all variables with the corresponding
+//values
+fn replace_variables(arg: &str, replacements: HashMap<String, String>) -> String {
+    println!("processing: {}", &arg);
+    let mut ret = String::from(arg);
+    for (key, value) in &replacements {
+        /* create a variable string eg. XXX becomes ${XXX} */
+        let key_var = format!("${{{}}}", key.as_str());
+        println!("replacing: {}. ret is: {}", &key_var, &ret);
+        loop {
+            /* replace all instances of the variable */
+            if !ret.contains(key_var.as_str()) {
+                break;
+            }
+            ret = ret.replace(&key_var, value);
+        }
+    }
+
+    println!("Returning: {}", &ret);
+    ret
+}
+
+const VAR_OS: &str = "RAD_OS";
+const VAR_ARCH: &str = "RAD_ARCH";
+const VAR_BROKER_ADDR: &str = "RAD_BROKER_ADDR";
+const VAR_BASE_DIR: &str = "RAD_BASE_DIR";
 const ENV_RAD_INSTANCE_ID: &str = "RAD_INSTANCE_ID";
+fn create_variables(app_ctx: Arc<AppCtx>, app: &App) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert(ENV_RAD_INSTANCE_ID.to_string(), app.instance_id.clone());
+    map.insert(VAR_BASE_DIR.to_string(), app_ctx.base_dir.clone());
+    map.insert(VAR_BROKER_ADDR.to_string(), app_ctx.config.broker.bind_addr.clone());
+    map.insert(VAR_OS.to_string(), app_ctx.system_info.os.clone());
+    map.insert(VAR_ARCH.to_string(), app_ctx.system_info.arch.clone());
+    map
+}
+
+/* for each argument, look for variables and replace them */
+fn pre_process_args(args: &[String], vars: HashMap<String, String>) -> Vec<String> {
+    let mut ret = vec![];
+    for arg in args {
+        let v = replace_variables(arg, vars.clone());
+        ret.push(v);
+    }
+    ret
+}
+
 async fn start_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<RunningAppInfo, Box<dyn Error + Sync + Send>> {
     /* find the manifest for this app */
     let app_info = get_manifest_entry_for_app(app_ctx.clone(), app).await?;
-    let app_base_dir = get_app_base_directory(app_ctx, app);
+    let app_base_dir = get_app_base_directory(app_ctx.clone(), app);
 
     let manifest = &app_info.manifest;
     let app_dir = format!("{}/{}", app_base_dir, manifest.version_code);
@@ -44,7 +93,9 @@ async fn start_app(app_ctx: Arc<AppCtx>, app: &App) -> Result<RunningAppInfo, Bo
 
     // Set the command-line arguments
     if let Some(args) = &manifest.execution.args {
-        command.args(args);
+        let vars = create_variables(app_ctx.clone(), app);
+        let processed_args = pre_process_args(args, vars);
+        command.args(processed_args);
     }
 
     // Set the working directory
@@ -195,4 +246,42 @@ pub async fn app_runner_main(app_ctx: Arc<AppCtx>,
     }
 
     info!("App runner stopped");
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_pre_process_args_with_valid_variables() {
+        let args = vec![
+            "os ${RAD_OS} ${RAD_ARCH}".to_string(),
+            "${RAD_INSTANCE_ID} is your instance id".to_string(),
+            "and ${RAD_BASE_DIR} is your base dir".to_string(),
+            "${RAD_BROKER_ADDR}".to_string(),
+            "no variables here".to_string(),
+            "${UNKNOWN_VARIABLE} is an unknown variable".to_string(),
+            "${} will not be processed".to_string(),
+        ];
+
+        let mut vars = HashMap::new();
+        vars.insert(ENV_RAD_INSTANCE_ID.to_string(), "test-app-1".to_string());
+        vars.insert(VAR_BASE_DIR.to_string(), "foo/blah".to_string());
+        vars.insert(VAR_BROKER_ADDR.to_string(), "localhost:8080".to_string());
+        vars.insert(VAR_OS.to_string(), "macos".to_string());
+        vars.insert(VAR_ARCH.to_string(), "aarch64".to_string());
+
+        let result = pre_process_args(&args, vars);
+
+        assert_eq!(result.len(), 7);
+        assert_eq!(result[0], "os macos aarch64");
+        assert_eq!(result[1], "test-app-1 is your instance id");
+        assert_eq!(result[2], "and foo/blah is your base dir");
+        assert_eq!(result[3], "localhost:8080");
+        assert_eq!(result[4], "no variables here");
+        assert_eq!(result[5], "${UNKNOWN_VARIABLE} is an unknown variable");
+        assert_eq!(result[6], "${} will not be processed");
+    }
 }

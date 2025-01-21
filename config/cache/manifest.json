@@ -19,7 +19,7 @@
           "execution": {
             "cmd": "echo",
             "args": [
-              "127.0.0.1:8888"
+              "${RAD_BROKER_ADDR}"
             ]
           }
         },
