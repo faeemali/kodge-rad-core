@@ -1,0 +1,11 @@
+This project is very incomplete.
+
+- rad-core works
+- basic server (in another project) works
+- a few basic apps (echo, webserver, wrapper) work, but are in another project
+- a UI needs to be built possibly (my lowest priority)
+
+a lot more apps need to be created. A lot more testing needs to be done. Scenarios like broadcast messages etc need to
+be implemented.
+
+In short, it needs work. If anyone is interested in contributing, let me know
